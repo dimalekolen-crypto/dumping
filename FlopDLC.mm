@@ -35,7 +35,7 @@
 #include <dispatch/dispatch.h>
 #include <CoreFoundation/CoreFoundation.h>
 
-static constexpr const char* kEspVersion = "136.9";
+static constexpr const char* kEspVersion = "137.0";
 
 #define SANE_PTR(p) ((uintptr_t)(p) > 0x100000000 && (uintptr_t)(p) < 0x00007FFFFFFFFFFF)
 
