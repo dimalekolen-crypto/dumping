@@ -6138,6 +6138,308 @@ static CGSize CachedTextSize(NSString* text, NSDictionary* attrs) {
 
 @end
 
+// =========================================================================================
+// ESP PREVIEW — живой предпросмотр стиля ESP прямо в меню.
+// Рисует манекен и накладывает на него ровно те настройки, что применяются в бою:
+// бокс, HP/броня, ник, дистанция, скелет, точка головы, снаплайн.
+// Ничего не читает из игры — только глобальные настройки, поэтому безопасен в любой момент.
+// =========================================================================================
+@interface EspPreviewView : UIView
+- (void)refresh;
+@end
+
+static void NLDrawCentered(NSString *text, CGFloat cx, CGFloat y, UIFont *font,
+                           UIColor *color, BOOL shadow) {
+    NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
+    attrs[NSFontAttributeName] = font;
+    attrs[NSForegroundColorAttributeName] = color;
+    if (shadow) {
+        NSShadow *sh = [[NSShadow alloc] init];
+        sh.shadowColor = [UIColor blackColor];
+        sh.shadowBlurRadius = 2.0;
+        sh.shadowOffset = CGSizeMake(0, 1);
+        attrs[NSShadowAttributeName] = sh;
+    }
+    CGSize sz = [text sizeWithAttributes:attrs];
+    [text drawAtPoint:CGPointMake(cx - sz.width / 2.0, y) withAttributes:attrs];
+}
+
+@implementation EspPreviewView {
+    NSTimer *_tick;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.backgroundColor = [UIColor clearColor];
+        self.opaque = NO;
+        self.userInteractionEnabled = NO;
+        self.contentMode = UIViewContentModeRedraw;
+    }
+    return self;
+}
+
+- (void)refresh {
+    [self setNeedsDisplay];
+}
+
+// Слайдеры толщины/ширины не пересобирают меню, поэтому предпросмотр обновляем сам.
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    [_tick invalidate];
+    _tick = nil;
+    if (self.window) {
+        __weak EspPreviewView *ws = self;
+        _tick = [NSTimer scheduledTimerWithTimeInterval:0.2 repeats:YES block:^(NSTimer *t) {
+            [ws setNeedsDisplay];
+        }];
+    }
+}
+
+- (void)dealloc {
+    [_tick invalidate];
+}
+
+- (void)drawDummyInBox:(CGRect)box {
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) {
+        return;
+    }
+    UIColor *body = [UIColor colorWithWhite:0.32 alpha:1.0];
+    const CGFloat cx = CGRectGetMidX(box);
+    const CGFloat h = box.size.height;
+
+    const CGFloat headR = h * 0.072;
+    const CGFloat headY = box.origin.y + headR + 2.0;
+    const CGFloat torsoTop = headY + headR + 2.0;
+    const CGFloat torsoH = h * 0.33;
+    const CGFloat torsoW = box.size.width * 0.46;
+    const CGFloat legTop = torsoTop + torsoH;
+    const CGFloat legH = h * 0.34;
+
+    [body setFill];
+    CGContextFillEllipseInRect(ctx, CGRectMake(cx - headR, headY - headR, headR * 2, headR * 2));
+
+    UIBezierPath *torso = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(cx - torsoW / 2.0, torsoTop, torsoW, torsoH)
+                                                        cornerRadius:torsoW * 0.22];
+    [torso fill];
+
+    CGContextSetStrokeColorWithColor(ctx, body.CGColor);
+    CGContextSetLineWidth(ctx, MAX(2.0, box.size.width * 0.10));
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+
+    CGContextMoveToPoint(ctx, cx - torsoW * 0.22, legTop);
+    CGContextAddLineToPoint(ctx, cx - torsoW * 0.30, legTop + legH);
+    CGContextMoveToPoint(ctx, cx + torsoW * 0.22, legTop);
+    CGContextAddLineToPoint(ctx, cx + torsoW * 0.30, legTop + legH);
+    CGContextStrokePath(ctx);
+
+    CGContextMoveToPoint(ctx, cx - torsoW * 0.50, torsoTop + 4);
+    CGContextAddLineToPoint(ctx, cx - torsoW * 0.74, torsoTop + torsoH * 0.88);
+    CGContextMoveToPoint(ctx, cx + torsoW * 0.50, torsoTop + 4);
+    CGContextAddLineToPoint(ctx, cx + torsoW * 0.74, torsoTop + torsoH * 0.88);
+    CGContextStrokePath(ctx);
+}
+
+- (void)drawSkeletonInBox:(CGRect)box color:(UIColor *)color {
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) {
+        return;
+    }
+    const CGFloat cx = CGRectGetMidX(box);
+    const CGFloat h = box.size.height;
+    const CGFloat headR = h * 0.072;
+    const CGFloat headY = box.origin.y + headR + 2.0;
+    const CGFloat neck = headY + headR;
+    const CGFloat shoulder = neck + h * 0.045;
+    const CGFloat chest = shoulder + h * 0.16;
+    const CGFloat hip = box.origin.y + h * 0.55;
+    const CGFloat knee = box.origin.y + h * 0.76;
+    const CGFloat foot = box.origin.y + h * 0.96;
+    const CGFloat half = box.size.width * 0.20;
+
+    CGContextSetStrokeColorWithColor(ctx, color.CGColor);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+
+    // позвоночник
+    CGContextMoveToPoint(ctx, cx, neck);
+    CGContextAddLineToPoint(ctx, cx, hip);
+    // плечи
+    CGContextMoveToPoint(ctx, cx - half, shoulder);
+    CGContextAddLineToPoint(ctx, cx + half, shoulder);
+    // руки
+    CGContextMoveToPoint(ctx, cx - half, shoulder);
+    CGContextAddLineToPoint(ctx, cx - half * 1.25, chest + h * 0.10);
+    CGContextMoveToPoint(ctx, cx + half, shoulder);
+    CGContextAddLineToPoint(ctx, cx + half * 1.25, chest + h * 0.10);
+    // таз
+    CGContextMoveToPoint(ctx, cx - half * 0.7, hip);
+    CGContextAddLineToPoint(ctx, cx + half * 0.7, hip);
+    // ноги
+    CGContextMoveToPoint(ctx, cx - half * 0.7, hip);
+    CGContextAddLineToPoint(ctx, cx - half * 0.55, knee);
+    CGContextAddLineToPoint(ctx, cx - half * 0.55, foot);
+    CGContextMoveToPoint(ctx, cx + half * 0.7, hip);
+    CGContextAddLineToPoint(ctx, cx + half * 0.55, knee);
+    CGContextAddLineToPoint(ctx, cx + half * 0.55, foot);
+    CGContextStrokePath(ctx);
+}
+
+- (void)drawRect:(CGRect)rect {
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) {
+        return;
+    }
+    const CGRect b = self.bounds;
+    if (b.size.width < 40 || b.size.height < 60) {
+        return;
+    }
+
+    [[UIColor colorWithWhite:0.035 alpha:1.0] setFill];
+    UIRectFill(b);
+
+    CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:1.0 alpha:0.045].CGColor);
+    CGContextSetLineWidth(ctx, 0.5);
+    for (CGFloat x = 0; x <= b.size.width; x += 16) {
+        CGContextMoveToPoint(ctx, x, 0);
+        CGContextAddLineToPoint(ctx, x, b.size.height);
+    }
+    for (CGFloat y = 0; y <= b.size.height; y += 16) {
+        CGContextMoveToPoint(ctx, 0, y);
+        CGContextAddLineToPoint(ctx, b.size.width, y);
+    }
+    CGContextStrokePath(ctx);
+
+    const CGFloat cx = CGRectGetMidX(b);
+    const CGFloat top = 34.0;
+    const CGFloat bottom = b.size.height - 34.0;
+    const CGFloat boxW = MIN(78.0, b.size.width * 0.42);
+    const CGRect box = CGRectMake(cx - boxW / 2.0, top, boxW, bottom - top);
+
+    [self drawDummyInBox:box];
+
+    // --- снаплайн (рисуем первым, чтобы лёг под бокс)
+    if (gTracersEnabled.load()) {
+        CGContextSetStrokeColorWithColor(ctx, (gTracerColor ?: [UIColor whiteColor]).CGColor);
+        CGContextSetLineWidth(ctx, 1.0);
+        CGContextMoveToPoint(ctx, cx, b.size.height);
+        CGContextAddLineToPoint(ctx, cx, CGRectGetMaxY(box));
+        CGContextStrokePath(ctx);
+    }
+
+    // --- скелет
+    if (gSkeletonEnabled.load()) {
+        [self drawSkeletonInBox:box color:(gSkelColor ?: [UIColor greenColor])];
+    }
+
+    // --- бокс
+    if (gEspEnabled.load()) {
+        UIColor *bc = gBoxColor ?: [UIColor redColor];
+        if (gBoxFilled.load()) {
+            [[bc colorWithAlphaComponent:gBoxFillAlpha.load()] setFill];
+            UIRectFill(box);
+        }
+        CGContextSetStrokeColorWithColor(ctx, bc.CGColor);
+        CGContextSetLineWidth(ctx, MAX(0.5, gBoxThickness.load()));
+        CGContextStrokeRect(ctx, box);
+    }
+
+    // --- HP
+    const CGFloat hp = 0.72;
+    if (gHealthBarEnabled.load()) {
+        const int style = gHealthBarStyle.load();
+        const CGFloat w = MAX(1.0, gHealthBarWidth.load());
+        CGRect bar;
+        if (style == 2) {
+            bar = CGRectMake(box.origin.x, box.origin.y - w - 3.0, box.size.width, w);
+        } else if (style == 1) {
+            bar = CGRectMake(CGRectGetMaxX(box) + 3.0, box.origin.y, w, box.size.height);
+        } else {
+            bar = CGRectMake(box.origin.x - w - 3.0, box.origin.y, w, box.size.height);
+        }
+        [[UIColor colorWithWhite:0.0 alpha:0.55] setFill];
+        UIRectFill(bar);
+
+        UIColor *fill;
+        if (gEspHealthGradient.load()) {
+            fill = [UIColor colorWithRed:(hp < 0.5 ? 1.0 : (1.0 - hp) * 2.0)
+                                   green:(hp > 0.5 ? 1.0 : hp * 2.0)
+                                    blue:0.15
+                                   alpha:1.0];
+        } else {
+            fill = [UIColor colorWithRed:0.25 green:0.90 blue:0.35 alpha:1.0];
+        }
+        CGRect f = bar;
+        if (style == 2) {
+            f.size.width = bar.size.width * hp;
+        } else {
+            f.origin.y = bar.origin.y + bar.size.height * (1.0 - hp);
+            f.size.height = bar.size.height * hp;
+        }
+        [fill setFill];
+        UIRectFill(f);
+    }
+
+    // --- броня (с противоположной стороны от HP)
+    if (gEspArmorBar.load()) {
+        const int style = gHealthBarStyle.load();
+        const CGFloat w = MAX(1.0, gHealthBarWidth.load());
+        const CGFloat ar = 0.60;
+        CGRect bar;
+        if (style == 2) {
+            bar = CGRectMake(box.origin.x, CGRectGetMaxY(box) + 3.0, box.size.width, w);
+        } else if (style == 1) {
+            bar = CGRectMake(box.origin.x - w - 3.0, box.origin.y, w, box.size.height);
+        } else {
+            bar = CGRectMake(CGRectGetMaxX(box) + 3.0, box.origin.y, w, box.size.height);
+        }
+        [[UIColor colorWithWhite:0.0 alpha:0.55] setFill];
+        UIRectFill(bar);
+        CGRect f = bar;
+        if (style == 2) {
+            f.size.width = bar.size.width * ar;
+        } else {
+            f.origin.y = bar.origin.y + bar.size.height * (1.0 - ar);
+            f.size.height = bar.size.height * ar;
+        }
+        [[UIColor colorWithRed:0.30 green:0.62 blue:1.0 alpha:1.0] setFill];
+        UIRectFill(f);
+    }
+
+    // --- точка головы
+    if (gHeadDotEnabled.load()) {
+        const CGFloat r = MAX(1.0, gHeadDotSize.load());
+        const CGFloat headR = box.size.height * 0.072;
+        const CGFloat headY = box.origin.y + headR + 2.0;
+        [[UIColor colorWithRed:1.0 green:0.25 blue:0.25 alpha:1.0] setFill];
+        CGContextFillEllipseInRect(ctx, CGRectMake(cx - r, headY - r, r * 2, r * 2));
+    }
+
+    // --- ник
+    if (gNameEnabled.load()) {
+        UIFont *f = [UIFont systemFontOfSize:9 weight:UIFontWeightSemibold];
+        NSString *name = @"Player";
+        CGSize sz = [name sizeWithAttributes:@{NSFontAttributeName: f}];
+        CGFloat ny = box.origin.y - sz.height - 5.0;
+        if (gNameBgEnabled.load()) {
+            [[UIColor colorWithWhite:0.0 alpha:0.55] setFill];
+            UIRectFill(CGRectMake(cx - sz.width / 2.0 - 3.0, ny - 1.0, sz.width + 6.0, sz.height + 2.0));
+        }
+        NLDrawCentered(name, cx, ny, f, gNameColor ?: [UIColor whiteColor], gEspDistanceShadow.load());
+    }
+
+    // --- дистанция
+    if (gDistanceEnabled.load()) {
+        UIFont *f = [UIFont systemFontOfSize:8 weight:UIFontWeightMedium];
+        NSString *d = (gDistanceFormat.load() == 1) ? @"42 u" : @"42 m";
+        CGFloat dy = gDistanceAbove.load() ? (box.origin.y - 26.0) : (CGRectGetMaxY(box) + 5.0);
+        NLDrawCentered(d, cx, dy, f, [UIColor colorWithWhite:0.88 alpha:1.0], gEspDistanceShadow.load());
+    }
+}
+
+@end
+
 @interface MenuView : UIView
 - (void)togglePlayerChamsMenu:(UIButton*)sender;
 - (void)toggleWeaponChamsMenu:(UIButton*)sender;
@@ -6436,7 +6738,7 @@ static const CGFloat kSidebarW = 108.0;
         [_sidebar addSubview:brand];
         
         UILabel *brandSub = [[UILabel alloc] initWithFrame:CGRectMake(14, 30, kSidebarW - 20, 12)];
-        brandSub.text = @"v136.9";
+        brandSub.text = [NSString stringWithFormat:@"v%s", kEspVersion];
         brandSub.textColor = NLAccent();
         brandSub.font = [UIFont systemFontOfSize:8 weight:UIFontWeightBold];
         [_sidebar addSubview:brandSub];
@@ -7844,6 +8146,14 @@ static NSString* NLIconForTab(NSString* title) {
             
             NLGroupBox *gCross = [[NLGroupBox alloc] initWithTitle:@"Crosshair & FOV" frame:CGRectMake(0, 1260, colW, 400)];
             [c1 addSubview:gCross];
+
+            // Живой предпросмотр: те же настройки, что и в бою, но на манекене.
+            NLGroupBox *gPrev = [[NLGroupBox alloc] initWithTitle:@"ESP Preview" frame:CGRectMake(0, 1670, colW, 430)];
+            [c1 addSubview:gPrev];
+            EspPreviewView *prevView = [[EspPreviewView alloc] initWithFrame:CGRectMake(12, 30, colW - 24, 386)];
+            prevView.layer.cornerRadius = 8;
+            prevView.clipsToBounds = YES;
+            [gPrev addSubview:prevView];
             CGFloat cy2 = 30;
             
             NLButton *bCHStyle = [[NLButton alloc] initWithTitle:(gCrosshairStyle == 0 ? @"Cross" : (gCrosshairStyle == 1 ? @"Dot" : (gCrosshairStyle == 2 ? @"Circle" : (gCrosshairStyle == 3 ? @"T" : @"X"))))];
