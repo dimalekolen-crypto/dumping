@@ -6871,10 +6871,11 @@ static NLButton* RageMakeCycle(NSString* initial, NSArray<NSString*>* labels, NS
     CGRect _origFrame;
     GarlandView *_garland;
     UIVisualEffectView *_motionBlur;
+    UILabel *_pageTitle;
 }
 
-static const CGFloat kTopBarH = 40.0;
-static const CGFloat kTabBarH = 40.0;
+static const CGFloat kTopBarH = 48.0;
+static const CGFloat kTabBarH = 48.0;
 static const CGFloat kStatusH = 22.0;
 static const CGFloat kPreviewW = 170.0;
 
@@ -6908,9 +6909,9 @@ static const CGFloat kPreviewW = 170.0;
         
         // Нижняя панель вкладок — как в референсе, без бокового меню.
         _tabBar = [[UIView alloc] initWithFrame:CGRectMake(0, frame.size.height - kTabBarH - kStatusH, frame.size.width, kTabBarH)];
-        _tabBar.backgroundColor = [UIColor colorWithWhite:0.055 alpha:1.0];
+        _tabBar.backgroundColor = [UIColor colorWithRed:0.08 green:0.082 blue:0.10 alpha:1.0];
         _tabBar.layer.borderWidth = 0.5;
-        _tabBar.layer.borderColor = NLBorder().CGColor;
+        _tabBar.layer.borderColor = [UIColor colorWithWhite:0.16 alpha:1.0].CGColor;
         [self addSubview:_tabBar];
 
         _statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, frame.size.height - kStatusH, frame.size.width - 24, kStatusH)];
@@ -6920,20 +6921,26 @@ static const CGFloat kPreviewW = 170.0;
         [self addSubview:_statusLabel];
         
         _topBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, frame.size.width, kTopBarH)];
-        _topBar.backgroundColor = [UIColor clearColor];
+        _topBar.backgroundColor = [UIColor colorWithRed:0.085 green:0.087 blue:0.105 alpha:1.0];
         _topBar.layer.borderWidth = 0.5;
-        _topBar.layer.borderColor = NLBorder().CGColor;
+        _topBar.layer.borderColor = [UIColor colorWithWhite:0.16 alpha:1.0].CGColor;
         _topBar.userInteractionEnabled = YES;
         
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panAction:)];
         [_topBar addGestureRecognizer:pan];
         [self addSubview:_topBar];
         
-        UILabel *pageTitle = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 160, kTopBarH)];
-        pageTitle.text = @"Dashboard";
-        pageTitle.textColor = [UIColor whiteColor];
-        pageTitle.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
-        [_topBar addSubview:pageTitle];
+        UILabel *logo = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 25, kTopBarH)];
+        logo.text = @"✿";
+        logo.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+        logo.textColor = [UIColor colorWithRed:0.82 green:0.52 blue:0.84 alpha:1.0];
+        [_topBar addSubview:logo];
+
+        _pageTitle = [[UILabel alloc] initWithFrame:CGRectMake(43, 0, 220, kTopBarH)];
+        _pageTitle.text = @"Visuals";
+        _pageTitle.textColor = [UIColor whiteColor];
+        _pageTitle.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+        [_topBar addSubview:_pageTitle];
         
         _tabs = [NSMutableArray array];
         // LEGIT first, RAGE right beside it: the two aim tabs stay adjacent so switching
@@ -6949,21 +6956,21 @@ static const CGFloat kPreviewW = 170.0;
         [self addTab:@"CONFIG" x:512];
         
         UIButton *cfg = [UIButton buttonWithType:UIButtonTypeCustom];
-        cfg.frame = CGRectMake(_topBar.bounds.size.width - 90, 10, 15, 15);
+        cfg.frame = CGRectMake(_topBar.bounds.size.width - 90, 16, 15, 15);
         [cfg setImage:[UIImage systemImageNamed:@"gearshape"] forState:UIControlStateNormal];
         cfg.tintColor = NLTextDim();
         [cfg addTarget:self action:@selector(openSettings) forControlEvents:UIControlEventTouchUpInside];
         [_topBar addSubview:cfg];
         
         UIButton *mb = [UIButton buttonWithType:UIButtonTypeCustom];
-        mb.frame = CGRectMake(_topBar.bounds.size.width - 60, 10, 15, 15);
+        mb.frame = CGRectMake(_topBar.bounds.size.width - 60, 16, 15, 15);
         [mb setImage:[UIImage systemImageNamed:@"minus"] forState:UIControlStateNormal];
         mb.tintColor = [UIColor lightGrayColor];
         [mb addTarget:self action:@selector(minimizeAction) forControlEvents:UIControlEventTouchUpInside];
         [_topBar addSubview:mb];
         
         UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
-        cb.frame = CGRectMake(_topBar.bounds.size.width - 30, 10, 15, 15);
+        cb.frame = CGRectMake(_topBar.bounds.size.width - 30, 16, 15, 15);
         [cb setImage:[UIImage systemImageNamed:@"xmark"] forState:UIControlStateNormal];
         cb.tintColor = [UIColor lightGrayColor];
         [cb addTarget:self action:@selector(closeAction) forControlEvents:UIControlEventTouchUpInside];
@@ -7198,25 +7205,14 @@ static NSString* NLIconForTab(NSString* title) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
     NSUInteger idx = _tabs.count;
     CGFloat w = _tabBar.bounds.size.width / 9.0;
-    b.frame = CGRectMake(idx * w, 0, w, _tabBar.bounds.size.height);
+    b.frame = CGRectMake(idx * w + 2, 7, w - 4, 34);
     [b setTitle:SafeStr(title) forState:UIControlStateNormal];
-    b.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+    b.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
     b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
-    [b setTitleColor:NLTextDim() forState:UIControlStateNormal];
+    b.layer.cornerRadius = 6;
+    [b setTitleColor:[UIColor colorWithWhite:0.55 alpha:1.0] forState:UIControlStateNormal];
     b.backgroundColor = [UIColor clearColor];
     [b addTarget:self action:@selector(tabTap:) forControlEvents:UIControlEventTouchUpInside];
-
-    UIView *ul = [[UIView alloc] initWithFrame:CGRectMake(0, _tabBar.bounds.size.height - 2, w, 2)];
-    ul.tag = 999;
-    ul.hidden = YES;
-    CAGradientLayer *ug = [CAGradientLayer layer];
-    ug.frame = CGRectMake(0, 0, w, 2);
-    ug.colors = @[(id)NLAccent().CGColor, (id)NLAccent2().CGColor];
-    ug.startPoint = CGPointMake(0, 0.5);
-    ug.endPoint = CGPointMake(1, 0.5);
-    [ul.layer addSublayer:ug];
-    [b addSubview:ul];
-
     [_tabBar addSubview:b];
     [_tabs addObject:b];
 }
@@ -7263,14 +7259,13 @@ static NSString* NLIconForTab(NSString* title) {
     for (int i = 0; i < (int)_tabs.count; i++) {
         UIButton *b = _tabs[i];
         BOOL on = (i == tabIndex);
-        [b setTitleColor:(on ? [UIColor whiteColor] : NLTextDim()) forState:UIControlStateNormal];
-        b.tintColor = on ? [UIColor whiteColor] : NLTextDim();
-        b.backgroundColor = on ? [UIColor colorWithWhite:1.0 alpha:0.06] : [UIColor clearColor];
-        for (UIView *v in b.subviews) {
-            if (v.tag == 999) {
-                v.hidden = !on;
-            }
-        }
+        b.backgroundColor = on ? [UIColor colorWithRed:0.19 green:0.14 blue:0.20 alpha:1.0] : [UIColor clearColor];
+        [b setTitleColor:(on ? [UIColor colorWithRed:0.86 green:0.62 blue:0.87 alpha:1.0]
+                            : [UIColor colorWithWhite:0.55 alpha:1.0])
+                forState:UIControlStateNormal];
+    }
+    if (tabIndex >= 0 && tabIndex < (int)_tabs.count) {
+        _pageTitle.text = [_tabs[tabIndex] titleForState:UIControlStateNormal];
     }
     
     [self buildContent];
@@ -7308,15 +7303,7 @@ static NSString* NLIconForTab(NSString* title) {
     CGFloat tw = W / MAX(1.0, (CGFloat)_tabs.count);
     for (NSUInteger i = 0; i < _tabs.count; i++) {
         UIButton *b = _tabs[i];
-        b.frame = CGRectMake(i * tw, 0, tw, kTabBarH);
-        for (UIView *v in b.subviews) {
-            if (v.tag == 999) {
-                v.frame = CGRectMake(0, kTabBarH - 2, tw, 2);
-                for (CALayer *gl in v.layer.sublayers) {
-                    gl.frame = v.bounds;
-                }
-            }
-        }
+        b.frame = CGRectMake(i * tw + 2, 7, tw - 4, 34);
     }
 
     CGFloat segW = (kPreviewW - 16) / 3.0;
@@ -10290,7 +10277,7 @@ static NSString* NLIconForTab(NSString* title) {
     
     [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
         if (self->_isMinimized) {
-            self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, self->_origFrame.size.width, 35);
+            self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, self->_origFrame.size.width, kTopBarH);
             self->_content.hidden = YES;
             self->_tabBar.hidden = YES;
             self->_previewPanel.hidden = YES;
@@ -11476,7 +11463,7 @@ static void startMainUI(void) {
             gHotZone = [[HotZoneView alloc] initWithFrame:CGRectMake((gMainWin.bounds.size.width - 60)/2, (gMainWin.bounds.size.height - 60)/2, 60, 60)];
             [gOverlayContainer addSubview:gHotZone];
             
-            gMenuView = [[MenuView alloc] initWithFrame:CGRectMake((gMainWin.bounds.size.width - 700)/2, (gMainWin.bounds.size.height - 460)/2, 700, 460)];
+            gMenuView = [[MenuView alloc] initWithFrame:CGRectMake((gMainWin.bounds.size.width - 820)/2, (gMainWin.bounds.size.height - 500)/2, 820, 500)];
             gMenuView.hidden = YES;
             [gOverlayContainer addSubview:gMenuView];
             
