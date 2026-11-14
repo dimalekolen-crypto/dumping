@@ -2722,21 +2722,116 @@ static bool hook_install(void* mi, void* hook, void** orig) {
 // target+16, so the original body still runs.
 // ---------------------------------------------------------------------------------------
 
-static bool InsnIsPCRelative(uint32_t insn) {
-    if ((insn & 0x7C000000u) == 0x14000000u) return true; // B / BL
-    if ((insn & 0xFF000010u) == 0x54000000u) return true; // B.cond
-    if ((insn & 0x7E000000u) == 0x34000000u) return true; // CBZ / CBNZ
-    if ((insn & 0x7E000000u) == 0x36000000u) return true; // TBZ / TBNZ
-    if ((insn & 0x9F000000u) == 0x10000000u) return true; // ADR
-    if ((insn & 0x9F000000u) == 0x90000000u) return true; // ADRP
-    if ((insn & 0x3B000000u) == 0x18000000u) return true; // LDR literal
-    return false;
+static int64_t SignExtend64(uint64_t value, int bits) {
+    uint64_t sign = 1ULL << (bits - 1);
+    return (int64_t)((value ^ sign) - sign);
 }
 
-static void* AllocExecPage(size_t size) {
+// Re-encode one PC-relative instruction so that it computes the same absolute target from
+// `toPC` instead of `fromPC`. Returns false when the new displacement does not fit, which
+// is the only case where the caller must give up instead of writing a broken trampoline.
+static bool RelocateInsn(uint32_t insn, uintptr_t fromPC, uintptr_t toPC, uint32_t* out) {
+    // ADRP: page address = (PC & ~0xFFF) + (imm << 12)
+    if ((insn & 0x9F000000u) == 0x90000000u) {
+        uint32_t rd = insn & 0x1Fu;
+        uint64_t immlo = (insn >> 29) & 3u;
+        uint64_t immhi = (insn >> 5) & 0x7FFFFu;
+        int64_t imm = SignExtend64((immhi << 2) | immlo, 21);
+        uintptr_t target = (fromPC & ~(uintptr_t)0xFFF) + (uintptr_t)(imm << 12);
+        int64_t newImm = ((int64_t)target - (int64_t)(toPC & ~(uintptr_t)0xFFF)) >> 12;
+        if (newImm < -(1LL << 20) || newImm >= (1LL << 20)) {
+            return false;
+        }
+        *out = 0x90000000u | ((uint32_t)(newImm & 3) << 29) |
+               ((uint32_t)((newImm >> 2) & 0x7FFFF) << 5) | rd;
+        return true;
+    }
+    // B / BL
+    if ((insn & 0x7C000000u) == 0x14000000u) {
+        int64_t off = SignExtend64(insn & 0x3FFFFFFu, 26) << 2;
+        int64_t newOff = (int64_t)(fromPC + off) - (int64_t)toPC;
+        if ((newOff & 3) || newOff < -(1LL << 27) || newOff >= (1LL << 27)) {
+            return false;
+        }
+        *out = (insn & 0xFC000000u) | (uint32_t)((newOff >> 2) & 0x3FFFFFF);
+        return true;
+    }
+    // B.cond
+    if ((insn & 0xFF000010u) == 0x54000000u) {
+        int64_t off = SignExtend64((insn >> 5) & 0x7FFFFu, 19) << 2;
+        int64_t newOff = (int64_t)(fromPC + off) - (int64_t)toPC;
+        if ((newOff & 3) || newOff < -(1LL << 20) || newOff >= (1LL << 20)) {
+            return false;
+        }
+        *out = (insn & 0xFF00001Fu) | ((uint32_t)((newOff >> 2) & 0x7FFFF) << 5);
+        return true;
+    }
+    // CBZ / CBNZ
+    if ((insn & 0x7E000000u) == 0x34000000u) {
+        int64_t off = SignExtend64((insn >> 5) & 0x7FFFFu, 19) << 2;
+        int64_t newOff = (int64_t)(fromPC + off) - (int64_t)toPC;
+        if ((newOff & 3) || newOff < -(1LL << 20) || newOff >= (1LL << 20)) {
+            return false;
+        }
+        *out = (insn & 0xFF00001Fu) | ((uint32_t)((newOff >> 2) & 0x7FFFF) << 5);
+        return true;
+    }
+    // TBZ / TBNZ
+    if ((insn & 0x7E000000u) == 0x36000000u) {
+        int64_t off = SignExtend64((insn >> 5) & 0x3FFFu, 14) << 2;
+        int64_t newOff = (int64_t)(fromPC + off) - (int64_t)toPC;
+        if ((newOff & 3) || newOff < -(1LL << 15) || newOff >= (1LL << 15)) {
+            return false;
+        }
+        *out = (insn & 0xFFF8001Fu) | ((uint32_t)((newOff >> 2) & 0x3FFF) << 5);
+        return true;
+    }
+    // LDR literal
+    if ((insn & 0x3B000000u) == 0x18000000u) {
+        int64_t off = SignExtend64((insn >> 5) & 0x7FFFFu, 19) << 2;
+        int64_t newOff = (int64_t)(fromPC + off) - (int64_t)toPC;
+        if ((newOff & 3) || newOff < -(1LL << 20) || newOff >= (1LL << 20)) {
+            return false;
+        }
+        *out = (insn & 0xFF00001Fu) | ((uint32_t)((newOff >> 2) & 0x7FFFF) << 5);
+        return true;
+    }
+    *out = insn;
+    return true;
+}
+
+// The trampoline has to sit close to the patched function: a relocated B/BL reaches
+// ±128 MB and ADRP reaches ±4 GB, so a page from the general heap is not good enough.
+static void* AllocExecNear(uintptr_t target, size_t size) {
+    const int64_t step = 0x1000000; // 16 MB
+    const uintptr_t base = target & ~(uintptr_t)0xFFF;
+    for (int i = 1; i <= 8; ++i) {
+        for (int dir = 1; dir >= -1; dir -= 2) {
+            uintptr_t hint = (uintptr_t)((int64_t)base + dir * i * step);
+            void* p = mmap((void*)hint, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                           MAP_PRIVATE | MAP_ANON, -1, 0);
+            if (p == MAP_FAILED) {
+                continue;
+            }
+            int64_t d = (int64_t)((uintptr_t)p - target);
+            if (d > -(1LL << 27) && d < (1LL << 27)) {
+                return p;
+            }
+            munmap(p, size);
+        }
+    }
+    // Last resort: anywhere inside ADRP's ±4 GB reach. A prologue that also contains a
+    // B/BL will fail relocation and the caller bails out cleanly.
     void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANON, -1, 0);
-    return (p == MAP_FAILED) ? nullptr : p;
+    if (p != MAP_FAILED) {
+        int64_t d = (int64_t)((uintptr_t)p - target);
+        if (d > -(1LL << 31) && d < (1LL << 31)) {
+            return p;
+        }
+        munmap(p, size);
+    }
+    return nullptr;
 }
 
 static bool inline_hook_install(void* target, void* hook, void** orig) {
@@ -2757,18 +2852,26 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
         got != sizeof(saved)) {
         return false;
     }
-    for (int i = 0; i < 4; ++i) {
-        if (InsnIsPCRelative(saved[i])) {
-            // Relocating these needs a full disassembler; refuse instead of corrupting.
-            return false;
-        }
-    }
     
-    uint8_t* tramp = (uint8_t*)AllocExecPage(64);
+    LOG(@"[SA] prologue %p: %08x %08x %08x %08x", target,
+        saved[0], saved[1], saved[2], saved[3]);
+    
+    uint8_t* tramp = (uint8_t*)AllocExecNear((uintptr_t)target, 64);
     if (!tramp) {
+        LOG(@"[SA] trampoline alloc failed near %p", target);
         return false;
     }
-    memcpy(tramp, saved, 16);
+    
+    for (int i = 0; i < 4; ++i) {
+        uint32_t relocated = 0;
+        if (!RelocateInsn(saved[i], (uintptr_t)target + i * 4,
+                          (uintptr_t)tramp + i * 4, &relocated)) {
+            LOG(@"[SA] cannot relocate insn %d: %08x", i, saved[i]);
+            munmap(tramp, 64);
+            return false;
+        }
+        ((uint32_t*)tramp)[i] = relocated;
+    }
     uint32_t* t = (uint32_t*)(tramp + 16);
     t[0] = 0x58000050u; // ldr x16, #8
     t[1] = 0xD61F0200u; // br x16
@@ -2777,12 +2880,14 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
     
     long ps = sysconf(_SC_PAGESIZE);
     if (ps <= 0) {
+        munmap(tramp, 64);
         return false;
     }
     vm_address_t start = (vm_address_t)target & ~((vm_address_t)ps - 1);
     vm_address_t end = ((vm_address_t)target + 16 + ps - 1) & ~((vm_address_t)ps - 1);
     if (vm_protect(mach_task_self(), start, end - start, FALSE,
                    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) {
+        munmap(tramp, 64);
         return false;
     }
     
@@ -2796,6 +2901,7 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
     if (orig) {
         *orig = tramp;
     }
+    LOG(@"[SA] inline hook ok: target=%p tramp=%p", target, tramp);
     return true;
 #endif
 }
