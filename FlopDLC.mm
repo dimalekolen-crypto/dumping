@@ -10894,6 +10894,13 @@ static void startMainUI(void) {
             
             gAttached = true;
             LOG(@"Attached v%s", kEspVersion);
+            LOG(@"[FlopDLC] build %s %s", __DATE__, __TIME__);
+            {
+                Dl_info dlInfo;
+                if (dladdr((const void*)&kEspVersion, &dlInfo) && dlInfo.dli_fname) {
+                    LOG(@"[FlopDLC] image %s", dlInfo.dli_fname);
+                }
+            }
             
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 @try {
