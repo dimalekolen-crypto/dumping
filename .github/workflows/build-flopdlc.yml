@@ -103,7 +103,10 @@ jobs:
 
           # Точка входа — __attribute__((constructor)). При chained fixups (iOS 15+)
           # ld64 кладёт её в __DATA,__init_offsets, иначе в __DATA,__mod_init_func.
-          for ARCH in arm64 arm64e; do
+          # Идём по слайсам, которые реально есть в fat-файле: arm64e — best-effort.
+          ARCHS="$(lipo -archs "$OUT")"
+          echo "slices: $ARCHS"
+          for ARCH in $ARCHS; do
             echo "--- $ARCH init section"
             if otool -arch "$ARCH" -l "$OUT" | grep -qE "sectname __(mod_init_func|init_offsets)"; then
               otool -arch "$ARCH" -l "$OUT" | grep -E "sectname __(mod_init_func|init_offsets)"
