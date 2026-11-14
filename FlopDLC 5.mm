@@ -1,5 +1,5 @@
 // =========================================================================================
-// FlopDLC.mm — v137.0 (idle mod is fully hands-off; match entry fixed)
+// FlopDLC.mm — v137.0 (idle mod is fully hands-off; match entry fixed
 // =========================================================================================
 // Сборка: clang++ -arch arm64 -miphoneos-version-min=15.0 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -std=c++17 -fobjc-arc -O2 -fvisibility=hidden -dynamiclib -install_name @rpath/FlopDLC.dylib -framework Foundation -framework UIKit -framework CoreGraphics -framework CoreFoundation -framework QuartzCore -framework AVFoundation FlopDLC.mm -o FlopDLC.dylib
 // =========================================================================================
