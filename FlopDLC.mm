@@ -5145,21 +5145,24 @@ static UIImage* CreateFlopDLCFLogo(CGSize size) {
 @property (nonatomic, strong) UILabel *titleLabel;
 @end
 
-// Монохромная палитра как в референсе: почти чёрные поверхности, белый акцент.
+// Палитра: розово-фиолетовый акцент на почти чёрном, серые подложки.
 static UIColor* NLAccent(void) {
-    return gMenuAccent ?: [UIColor colorWithWhite:0.96 alpha:1.0];
+    return gMenuAccent ?: [UIColor colorWithRed:0.78 green:0.42 blue:0.98 alpha:1.0];
+}
+static UIColor* NLAccent2(void) {
+    return [UIColor colorWithRed:0.96 green:0.42 blue:0.78 alpha:1.0];
 }
 static UIColor* NLSurface(void) {
-    return [UIColor colorWithWhite:0.016 alpha:1.0];
+    return [UIColor colorWithRed:0.035 green:0.031 blue:0.047 alpha:1.0];
 }
 static UIColor* NLSurfaceHi(void) {
-    return [UIColor colorWithWhite:0.078 alpha:1.0];
+    return [UIColor colorWithRed:0.086 green:0.075 blue:0.114 alpha:1.0];
 }
 static UIColor* NLBorder(void) {
-    return [UIColor colorWithWhite:0.122 alpha:1.0];
+    return [UIColor colorWithRed:0.176 green:0.153 blue:0.227 alpha:1.0];
 }
 static UIColor* NLTextDim(void) {
-    return [UIColor colorWithWhite:0.54 alpha:1.0];
+    return [UIColor colorWithRed:0.55 green:0.52 blue:0.62 alpha:1.0];
 }
 
 @implementation NLGroupBox
@@ -6526,6 +6529,89 @@ static void NLDrawCentered(NSString *text, CGFloat cx, CGFloat y, UIFont *font,
 
 @end
 
+// =========================================================================================
+// GARLAND — гирлянда из лампочек по нижней кромке верхней панели.
+// =========================================================================================
+@interface GarlandView : UIView
+@end
+
+@implementation GarlandView {
+    CADisplayLink *_link;
+    CFTimeInterval _t0;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.backgroundColor = [UIColor clearColor];
+        self.opaque = NO;
+        self.userInteractionEnabled = NO;
+        self.contentMode = UIViewContentModeRedraw;
+    }
+    return self;
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    [_link invalidate];
+    _link = nil;
+    if (self.window) {
+        _t0 = CACurrentMediaTime();
+        _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick)];
+        [_link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
+}
+
+- (void)tick {
+    [self setNeedsDisplay];
+}
+
+- (void)dealloc {
+    [_link invalidate];
+}
+
+- (void)drawRect:(CGRect)rect {
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) {
+        return;
+    }
+    CGFloat w = self.bounds.size.width;
+    CGFloat h = self.bounds.size.height;
+    if (w < 40.0 || h < 12.0) {
+        return;
+    }
+
+    double t = CACurrentMediaTime() - _t0;
+    CGFloat y0 = 3.0;
+    CGFloat sag = h * 0.42;
+
+    CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithWhite:1.0 alpha:0.10].CGColor);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGContextMoveToPoint(ctx, 0, y0);
+    CGContextAddQuadCurveToPoint(ctx, w * 0.5, y0 + sag * 2.0, w, y0);
+    CGContextStrokePath(ctx);
+
+    int bulbs = MAX(8, (int)(w / 24.0));
+    for (int i = 0; i <= bulbs; i++) {
+        CGFloat u = (CGFloat)i / (CGFloat)bulbs;
+        CGFloat x = u * w;
+        CGFloat y = y0 + 4.0 * sag * u * (1.0 - u);
+
+        double phase = t * 2.4 + (double)i * 0.65;
+        CGFloat glow = 0.45 + 0.55 * (CGFloat)(0.5 + 0.5 * sin(phase));
+
+        UIColor *c = (i % 2 == 0) ? NLAccent() : NLAccent2();
+
+        CGContextSetFillColorWithColor(ctx, [c colorWithAlphaComponent:0.16 * glow].CGColor);
+        CGContextFillEllipseInRect(ctx, CGRectMake(x - 7.0, y - 7.0, 14.0, 14.0));
+
+        CGContextSetFillColorWithColor(ctx, [c colorWithAlphaComponent:0.45 + 0.55 * glow].CGColor);
+        CGContextFillEllipseInRect(ctx, CGRectMake(x - 2.5, y - 2.5, 5.0, 5.0));
+    }
+}
+
+@end
+
 @interface MenuView : UIView
 - (void)togglePlayerChamsMenu:(UIButton*)sender;
 - (void)toggleWeaponChamsMenu:(UIButton*)sender;
@@ -6783,6 +6869,8 @@ static NLButton* RageMakeCycle(NSString* initial, NSArray<NSString*>* labels, NS
     int _currentTab;
     BOOL _isMinimized;
     CGRect _origFrame;
+    GarlandView *_garland;
+    UIVisualEffectView *_motionBlur;
 }
 
 static const CGFloat kTopBarH = 40.0;
@@ -6807,8 +6895,8 @@ static const CGFloat kPreviewW = 170.0;
         
         CAGradientLayer *grad = [CAGradientLayer layer];
         grad.frame = self.bounds;
-        grad.colors = @[(id)[UIColor colorWithWhite:0.016 alpha:0.96].CGColor,
-                        (id)[UIColor colorWithWhite:0.016 alpha:0.96].CGColor];
+        grad.colors = @[(id)[UIColor colorWithRed:0.055 green:0.035 blue:0.086 alpha:0.97].CGColor,
+                        (id)[UIColor colorWithRed:0.020 green:0.016 blue:0.031 alpha:0.97].CGColor];
         grad.startPoint = CGPointMake(0, 0);
         grad.endPoint = CGPointMake(1, 1);
         [self.layer insertSublayer:grad atIndex:0];
@@ -6897,7 +6985,7 @@ static const CGFloat kPreviewW = 170.0;
         _previewPanel.backgroundColor = NLSurfaceHi();
         _previewPanel.layer.cornerRadius = 10;
         _previewPanel.layer.borderWidth = 1;
-        _previewPanel.layer.borderColor = NLBorder().CGColor;
+        _previewPanel.layer.borderColor = [NLAccent() colorWithAlphaComponent:0.30].CGColor;
         [self addSubview:_previewPanel];
 
         NSArray *segTitles = @[@"Players", @"Local", @"World"];
@@ -6908,7 +6996,7 @@ static const CGFloat kPreviewW = 170.0;
             [sb setTitle:segTitles[i] forState:UIControlStateNormal];
             sb.titleLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightSemibold];
             [sb setTitleColor:(i == 0 ? [UIColor whiteColor] : NLTextDim()) forState:UIControlStateNormal];
-            sb.backgroundColor = (i == 0 ? [UIColor colorWithWhite:1.0 alpha:0.10] : [UIColor clearColor]);
+            sb.backgroundColor = (i == 0 ? [NLAccent() colorWithAlphaComponent:0.22] : [UIColor clearColor]);
             sb.layer.cornerRadius = 5;
             sb.tag = 900 + i;
             [sb addTarget:self action:@selector(previewSegTap:) forControlEvents:UIControlEventTouchUpInside];
@@ -6920,7 +7008,20 @@ static const CGFloat kPreviewW = 170.0;
         pv.layer.cornerRadius = 8;
         pv.clipsToBounds = YES;
         [_previewPanel addSubview:pv];
-        
+
+        // Гирлянда по нижней кромке верхней панели.
+        _garland = [[GarlandView alloc] initWithFrame:CGRectMake(0, kTopBarH - 8, frame.size.width, 26)];
+        _garland.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+        [self addSubview:_garland];
+
+        // Моушн-блюр: проявляется, пока меню тащат.
+        _motionBlur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+        _motionBlur.frame = self.bounds;
+        _motionBlur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        _motionBlur.alpha = 0.0;
+        _motionBlur.userInteractionEnabled = NO;
+        [self addSubview:_motionBlur];
+
         [self switchToTab:0];
 
         __weak MenuView *weakMenu = self;
@@ -7106,9 +7207,14 @@ static NSString* NLIconForTab(NSString* title) {
     [b addTarget:self action:@selector(tabTap:) forControlEvents:UIControlEventTouchUpInside];
 
     UIView *ul = [[UIView alloc] initWithFrame:CGRectMake(0, _tabBar.bounds.size.height - 2, w, 2)];
-    ul.backgroundColor = [UIColor whiteColor];
     ul.tag = 999;
     ul.hidden = YES;
+    CAGradientLayer *ug = [CAGradientLayer layer];
+    ug.frame = CGRectMake(0, 0, w, 2);
+    ug.colors = @[(id)NLAccent().CGColor, (id)NLAccent2().CGColor];
+    ug.startPoint = CGPointMake(0, 0.5);
+    ug.endPoint = CGPointMake(1, 0.5);
+    [ul.layer addSublayer:ug];
     [b addSubview:ul];
 
     [_tabBar addSubview:b];
@@ -7126,7 +7232,7 @@ static NSString* NLIconForTab(NSString* title) {
         }
         BOOL on = (b == sender);
         [b setTitleColor:(on ? [UIColor whiteColor] : NLTextDim()) forState:UIControlStateNormal];
-        b.backgroundColor = on ? [UIColor colorWithWhite:1.0 alpha:0.10] : [UIColor clearColor];
+        b.backgroundColor = on ? [NLAccent() colorWithAlphaComponent:0.22] : [UIColor clearColor];
     }
 }
 
@@ -7196,6 +7302,8 @@ static NSString* NLIconForTab(NSString* title) {
     _content.frame = CGRectMake(0, kTopBarH, W - kPreviewW - 16, H - kTopBarH - kTabBarH - kStatusH);
     _scrollView.frame = _content.bounds;
     _previewPanel.frame = CGRectMake(W - kPreviewW - 8, kTopBarH + 8, kPreviewW, H - kTopBarH - kTabBarH - kStatusH - 16);
+    _garland.frame = CGRectMake(0, kTopBarH - 8, W, 26);
+    _motionBlur.frame = self.bounds;
 
     CGFloat tw = W / MAX(1.0, (CGFloat)_tabs.count);
     for (NSUInteger i = 0; i < _tabs.count; i++) {
@@ -7204,6 +7312,9 @@ static NSString* NLIconForTab(NSString* title) {
         for (UIView *v in b.subviews) {
             if (v.tag == 999) {
                 v.frame = CGRectMake(0, kTabBarH - 2, tw, 2);
+                for (CALayer *gl in v.layer.sublayers) {
+                    gl.frame = v.bounds;
+                }
             }
         }
     }
@@ -10162,6 +10273,16 @@ static NSString* NLIconForTab(NSString* title) {
     CGPoint translation = [p translationInView:self.superview];
     self.center = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
     [p setTranslation:CGPointZero inView:self.superview];
+
+    if (p.state == UIGestureRecognizerStateChanged) {
+        CGPoint v = [p velocityInView:self.superview];
+        CGFloat speed = sqrt(v.x * v.x + v.y * v.y);
+        _motionBlur.alpha = MIN(0.55, speed / 1600.0);
+    } else if (p.state == UIGestureRecognizerStateEnded || p.state == UIGestureRecognizerStateCancelled) {
+        [UIView animateWithDuration:0.28 animations:^{
+            self->_motionBlur.alpha = 0.0;
+        }];
+    }
 }
 
 - (void)minimizeAction {
