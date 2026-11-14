@@ -100,17 +100,23 @@ jobs:
           otool -D "$OUT"
           echo "--- load commands"
           otool -l "$OUT" | grep -E "LC_BUILD_VERSION|platform|minos|sdk " | head -20 || true
-          echo "--- sections"
-          otool -l "$OUT" | grep -E "sectname|segname" | sort -u
 
-          # Точка входа — __attribute__((constructor)): без неё библиотека бесполезна.
-          if ! otool -l "$OUT" | grep -q "__mod_init_func"; then
-            echo "::error::в dylib нет __mod_init_func — конструктор не попал в бинарник"
-            exit 1
-          fi
-          echo "constructor section: ok"
+          # Точка входа — __attribute__((constructor)). При chained fixups (iOS 15+)
+          # ld64 кладёт её в __DATA,__init_offsets, иначе в __DATA,__mod_init_func.
+          for ARCH in arm64 arm64e; do
+            echo "--- $ARCH init section"
+            if otool -arch "$ARCH" -l "$OUT" | grep -qE "sectname __(mod_init_func|init_offsets)"; then
+              otool -arch "$ARCH" -l "$OUT" | grep -E "sectname __(mod_init_func|init_offsets)"
+            else
+              echo "::error::$ARCH: нет секции инициализаторов — конструктор не попал в бинарник"
+              exit 1
+            fi
+            echo "--- $ARCH ctor symbol"
+            nm -arch "$ARCH" "$OUT" | grep -iE "ctor|bootstrap" | head -5 || true
+          done
 
-          # Никаких неразрешённых символов, кроме ожидаемых динамических.
+          # Неразрешённые символы: печатаем, чтобы видеть, что тянется из игры.
+          echo "--- undefined symbols"
           nm -u "$OUT" | head -40 || true
 
           shasum -a 256 "$OUT" | tee "$OUT.sha256"
