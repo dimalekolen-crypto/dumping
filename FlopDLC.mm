@@ -12486,6 +12486,10 @@ typedef void (*fn_UseProcess)(void*, void*, void*);
 static fn_UseProcess orig_UseProcess = nullptr;
 
 static void hook_UseProcess(void* self, void* info, void* mi) {
+    static std::atomic<bool> seen{false};
+    if (!seen.exchange(true)) {
+        LOG(@"[BALL] UseProcess hook reached");
+    }
     // UseProcess only runs on a real shot, so it doubles as a fire-held signal when the
     // OnClickFire hooks are missing on this build.
     gFireHeldUntil = NowMs() + 600;
@@ -12735,22 +12739,15 @@ static void InstallBallisticsHooks(void) {
                 p_CalcShotHitsMI = miCalc;
                 void* calcPtr = methodPtr(miCalc);
                 LOG(@"[SA] fka mi=%p methodPtr=%p", miCalc, calcPtr);
-                if (inline_hook_install(calcPtr, (void*)hook_CalcShotHits,
-                                        (void**)&orig_CalcShotHits)) {
-                    // Recompute path must go through the trampoline, otherwise it would
-                    // call the patched entry and recurse into our own hook.
-                    p_CalcShotHits = orig_CalcShotHits;
-                    LOG(@"[SA] fka inline hook installed");
+                // Inline patching of __TEXT is suspected of tripping the game's integrity
+                // check on scene load: the crash lands right after Hub.unload, before fka is
+                // ever called, and only appeared once the arm64e bail was removed. Use the
+                // methodPointer hook only until that is confirmed.
+                p_CalcShotHits = (fn_CalcShotHits)calcPtr;
+                if (hook_install(miCalc, (void*)hook_CalcShotHits, (void**)&orig_CalcShotHits)) {
+                    LOG(@"[SA] fka methodPointer hook installed (inline disabled)");
                 } else {
-                    p_CalcShotHits = (fn_CalcShotHits)calcPtr;
-                    // Code patching is refused on this device. Rewriting methodPointer still
-                    // catches indirect call sites (delegates, reflection) even though a direct
-                    // bl bypasses it, so install it as a harmless fallback.
-                    if (hook_install(miCalc, (void*)hook_CalcShotHits, (void**)&orig_CalcShotHits)) {
-                        LOG(@"[SA] fka methodPointer hook installed (inline refused)");
-                    } else {
-                        LOG(@"[SA] fka inline hook FAILED (pc-relative prologue?)");
-                    }
+                    LOG(@"[SA] fka methodPointer hook FAILED");
                 }
             } else {
                 LOG(@"[SA] fka not found, silent aim disabled");
