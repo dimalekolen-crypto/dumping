@@ -5502,31 +5502,80 @@ static UIColor* NLTextDim(void) {
 @interface NLRow : UIView
 @end
 
-@implementation NLRow
+@implementation NLRow {
+    UILabel *_label;
+    UIView *_control;
+    NLColorSwatch *_swatch;
+}
 
 - (instancetype)initWithTitle:(NSString*)title y:(CGFloat)y control:(UIView*)control swatch:(NLColorSwatch*)swatch {
-    self = [super initWithFrame:CGRectMake(15, y, 210, 22)]; 
+    self = [super initWithFrame:CGRectMake(15, y, 210, 22)];
     if (self) {
-        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 100, 22)];
-        l.text = SafeStr(title);
-        l.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
-        l.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
-        [self addSubview:l];
-        
+        _label = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 100, 22)];
+        _label.text = SafeStr(title);
+        _label.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
+        _label.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        [self addSubview:_label];
+
+        _swatch = swatch;
         if (swatch) {
-            swatch.frame = CGRectMake(105, 3, 16, 16);
             [self addSubview:swatch];
         }
-        
+
+        _control = control;
         if (control) {
-            CGRect f = control.frame;
-            f.origin.x = 210 - f.size.width;
-            f.origin.y = (22 - f.size.height) / 2;
-            control.frame = f;
             [self addSubview:control];
         }
+        [self layoutRow];
     }
     return self;
+}
+
+// Ширина строки всегда равна ширине группы минус отступы: раньше здесь было
+// жёстко 210, и при узкой колонке контролы вылезали за рамку группы.
+- (void)adaptWidth {
+    UIView *p = self.superview;
+    if (!p) {
+        return;
+    }
+    CGFloat w = p.bounds.size.width - 30.0;
+    if (w < 60.0) {
+        return;
+    }
+    CGRect f = self.frame;
+    if (fabs(f.size.width - w) > 0.5) {
+        f.size.width = w;
+        self.frame = f;
+    }
+    [self layoutRow];
+}
+
+- (void)layoutRow {
+    CGFloat w = self.bounds.size.width;
+    CGFloat right = w;
+
+    if (_control) {
+        CGRect f = _control.frame;
+        f.origin.x = right - f.size.width;
+        f.origin.y = (22.0 - f.size.height) / 2.0;
+        _control.frame = f;
+        right -= f.size.width + 6.0;
+    }
+    if (_swatch) {
+        _swatch.frame = CGRectMake(right - 16.0, 3.0, 16.0, 16.0);
+        right -= 22.0;
+    }
+    _label.frame = CGRectMake(0, 0, MAX(20.0, right), 22.0);
+}
+
+- (void)didMoveToSuperview {
+    [super didMoveToSuperview];
+    [self adaptWidth];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self adaptWidth];
 }
 
 @end
@@ -5539,7 +5588,12 @@ static UIColor* NLTextDim(void) {
                      onDelete:(void(^)(void))onDelete;
 @end
 
-@implementation NLConfigRow
+@implementation NLConfigRow {
+    UILabel *_label;
+    NLButton *_bSave;
+    NLButton *_bLoad;
+    NLButton *_bDel;
+}
 
 - (instancetype)initWithTitle:(NSString*)title y:(CGFloat)y
                        onSave:(void(^)(void))onSave
@@ -5547,28 +5601,60 @@ static UIColor* NLTextDim(void) {
                      onDelete:(void(^)(void))onDelete {
     self = [super initWithFrame:CGRectMake(15, y, 210, 22)];
     if (self) {
-        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 90, 22)];
-        l.text = SafeStr(title);
-        l.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
-        l.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
-        [self addSubview:l];
-        
-        NLButton *bSave = [[NLButton alloc] initWithTitle:@"Save"];
-        bSave.frame = CGRectMake(96, 3, 34, 16);
-        bSave.onTap = onSave;
-        [self addSubview:bSave];
-        
-        NLButton *bLoad = [[NLButton alloc] initWithTitle:@"Load"];
-        bLoad.frame = CGRectMake(134, 3, 34, 16);
-        bLoad.onTap = onLoad;
-        [self addSubview:bLoad];
-        
-        NLButton *bDel = [[NLButton alloc] initWithTitle:@"Del"];
-        bDel.frame = CGRectMake(172, 3, 34, 16);
-        bDel.onTap = onDelete;
-        [self addSubview:bDel];
+        _label = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 90, 22)];
+        _label.text = SafeStr(title);
+        _label.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
+        _label.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        [self addSubview:_label];
+
+        _bSave = [[NLButton alloc] initWithTitle:@"Save"];
+        _bSave.onTap = onSave;
+        [self addSubview:_bSave];
+
+        _bLoad = [[NLButton alloc] initWithTitle:@"Load"];
+        _bLoad.onTap = onLoad;
+        [self addSubview:_bLoad];
+
+        _bDel = [[NLButton alloc] initWithTitle:@"Del"];
+        _bDel.onTap = onDelete;
+        [self addSubview:_bDel];
+
+        [self layoutRow];
     }
     return self;
+}
+
+- (void)layoutRow {
+    CGFloat w = self.bounds.size.width;
+    CGFloat bw = 34.0;
+    CGFloat gap = 4.0;
+    CGFloat x = w - (bw * 3.0 + gap * 2.0);
+    _bSave.frame = CGRectMake(x, 3, bw, 16);
+    _bLoad.frame = CGRectMake(x + bw + gap, 3, bw, 16);
+    _bDel.frame = CGRectMake(x + (bw + gap) * 2.0, 3, bw, 16);
+    _label.frame = CGRectMake(0, 0, MAX(20.0, x - 6.0), 22);
+}
+
+- (void)didMoveToSuperview {
+    [super didMoveToSuperview];
+    UIView *p = self.superview;
+    if (!p) {
+        return;
+    }
+    CGFloat w = p.bounds.size.width - 30.0;
+    if (w >= 60.0) {
+        CGRect f = self.frame;
+        if (fabs(f.size.width - w) > 0.5) {
+            f.size.width = w;
+            self.frame = f;
+        }
+    }
+    [self layoutRow];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self layoutRow];
 }
 
 @end
@@ -6699,10 +6785,10 @@ static NLButton* RageMakeCycle(NSString* initial, NSArray<NSString*>* labels, NS
     CGRect _origFrame;
 }
 
-static const CGFloat kSidebarW = 108.0;
-static const CGFloat kTabBarH = 34.0;
+static const CGFloat kTopBarH = 40.0;
+static const CGFloat kTabBarH = 40.0;
 static const CGFloat kStatusH = 22.0;
-static const CGFloat kPreviewW = 190.0;
+static const CGFloat kPreviewW = 170.0;
 
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
@@ -6745,7 +6831,7 @@ static const CGFloat kPreviewW = 190.0;
         _statusLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightMedium];
         [self addSubview:_statusLabel];
         
-        _topBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, frame.size.width, 35)];
+        _topBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, frame.size.width, kTopBarH)];
         _topBar.backgroundColor = [UIColor clearColor];
         _topBar.layer.borderWidth = 0.5;
         _topBar.layer.borderColor = NLBorder().CGColor;
@@ -6755,7 +6841,7 @@ static const CGFloat kPreviewW = 190.0;
         [_topBar addGestureRecognizer:pan];
         [self addSubview:_topBar];
         
-        UILabel *pageTitle = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 160, 35)];
+        UILabel *pageTitle = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 160, kTopBarH)];
         pageTitle.text = @"Dashboard";
         pageTitle.textColor = [UIColor whiteColor];
         pageTitle.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
@@ -6795,7 +6881,7 @@ static const CGFloat kPreviewW = 190.0;
         [cb addTarget:self action:@selector(closeAction) forControlEvents:UIControlEventTouchUpInside];
         [_topBar addSubview:cb];
         
-        _content = [[UIView alloc] initWithFrame:CGRectMake(0, 35, frame.size.width - kPreviewW - 8, frame.size.height - 35 - kTabBarH - kStatusH)];
+        _content = [[UIView alloc] initWithFrame:CGRectMake(0, kTopBarH, frame.size.width - kPreviewW - 16, frame.size.height - kTopBarH - kTabBarH - kStatusH)];
         [self addSubview:_content];
         
         _scrollView = [[UIScrollView alloc] initWithFrame:_content.bounds];
@@ -6803,11 +6889,11 @@ static const CGFloat kPreviewW = 190.0;
         _scrollView.showsVerticalScrollIndicator = NO;
         // VISUALS is the tallest tab (the third-person group sits at y 2660 + 240), so the
         // scroll area has to cover it.
-        _scrollView.contentSize = CGSizeMake(frame.size.width - kPreviewW - 8, 3400);
+        _scrollView.contentSize = CGSizeMake(_content.bounds.size.width, 3400);
         [_content addSubview:_scrollView];
 
         // Правая панель предпросмотра: вкладки Players / Local / World и манекен с ESP.
-        _previewPanel = [[UIView alloc] initWithFrame:CGRectMake(frame.size.width - kPreviewW - 8, 43, kPreviewW, frame.size.height - 35 - kTabBarH - kStatusH - 16)];
+        _previewPanel = [[UIView alloc] initWithFrame:CGRectMake(frame.size.width - kPreviewW - 8, kTopBarH + 8, kPreviewW, frame.size.height - kTopBarH - kTabBarH - kStatusH - 16)];
         _previewPanel.backgroundColor = NLSurfaceHi();
         _previewPanel.layer.cornerRadius = 10;
         _previewPanel.layer.borderWidth = 1;
@@ -6830,6 +6916,7 @@ static const CGFloat kPreviewW = 190.0;
         }
 
         EspPreviewView *pv = [[EspPreviewView alloc] initWithFrame:CGRectMake(8, 34, kPreviewW - 16, _previewPanel.bounds.size.height - 42)];
+        pv.tag = 903;
         pv.layer.cornerRadius = 8;
         pv.clipsToBounds = YES;
         [_previewPanel addSubview:pv];
@@ -7012,11 +7099,18 @@ static NSString* NLIconForTab(NSString* title) {
     CGFloat w = _tabBar.bounds.size.width / 9.0;
     b.frame = CGRectMake(idx * w, 0, w, _tabBar.bounds.size.height);
     [b setTitle:SafeStr(title) forState:UIControlStateNormal];
-    b.titleLabel.font = [UIFont systemFontOfSize:9 weight:UIFontWeightBold];
+    b.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
     b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
     [b setTitleColor:NLTextDim() forState:UIControlStateNormal];
     b.backgroundColor = [UIColor clearColor];
     [b addTarget:self action:@selector(tabTap:) forControlEvents:UIControlEventTouchUpInside];
+
+    UIView *ul = [[UIView alloc] initWithFrame:CGRectMake(0, _tabBar.bounds.size.height - 2, w, 2)];
+    ul.backgroundColor = [UIColor whiteColor];
+    ul.tag = 999;
+    ul.hidden = YES;
+    [b addSubview:ul];
+
     [_tabBar addSubview:b];
     [_tabs addObject:b];
 }
@@ -7062,14 +7156,14 @@ static NSString* NLIconForTab(NSString* title) {
     
     for (int i = 0; i < (int)_tabs.count; i++) {
         UIButton *b = _tabs[i];
-        if (i == tabIndex) {
-            [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-            b.tintColor = [UIColor whiteColor];
-            b.backgroundColor = [NLAccent() colorWithAlphaComponent:0.18];
-        } else {
-            [b setTitleColor:NLTextDim() forState:UIControlStateNormal];
-            b.tintColor = NLTextDim();
-            b.backgroundColor = [UIColor clearColor];
+        BOOL on = (i == tabIndex);
+        [b setTitleColor:(on ? [UIColor whiteColor] : NLTextDim()) forState:UIControlStateNormal];
+        b.tintColor = on ? [UIColor whiteColor] : NLTextDim();
+        b.backgroundColor = on ? [UIColor colorWithWhite:1.0 alpha:0.06] : [UIColor clearColor];
+        for (UIView *v in b.subviews) {
+            if (v.tag == 999) {
+                v.hidden = !on;
+            }
         }
     }
     
@@ -7087,6 +7181,41 @@ static NSString* NLIconForTab(NSString* title) {
     }
     self.transform = CGAffineTransformMakeScale(s, s);
     _blurView.hidden = !gMenuBlurEnabled.load();
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat W = self.bounds.size.width;
+    CGFloat H = self.bounds.size.height;
+    if (W < 200 || H < 120) {
+        return;
+    }
+    _topBar.frame = CGRectMake(0, 0, W, kTopBarH);
+    _tabBar.frame = CGRectMake(0, H - kTabBarH - kStatusH, W, kTabBarH);
+    _statusLabel.frame = CGRectMake(12, H - kStatusH, W - 24, kStatusH);
+    _content.frame = CGRectMake(0, kTopBarH, W - kPreviewW - 16, H - kTopBarH - kTabBarH - kStatusH);
+    _scrollView.frame = _content.bounds;
+    _previewPanel.frame = CGRectMake(W - kPreviewW - 8, kTopBarH + 8, kPreviewW, H - kTopBarH - kTabBarH - kStatusH - 16);
+
+    CGFloat tw = W / MAX(1.0, (CGFloat)_tabs.count);
+    for (NSUInteger i = 0; i < _tabs.count; i++) {
+        UIButton *b = _tabs[i];
+        b.frame = CGRectMake(i * tw, 0, tw, kTabBarH);
+        for (UIView *v in b.subviews) {
+            if (v.tag == 999) {
+                v.frame = CGRectMake(0, kTabBarH - 2, tw, 2);
+            }
+        }
+    }
+
+    CGFloat segW = (kPreviewW - 16) / 3.0;
+    for (UIView *v in _previewPanel.subviews) {
+        if (v.tag >= 900 && v.tag <= 902) {
+            v.frame = CGRectMake(8 + (v.tag - 900) * segW, 8, segW, 20);
+        } else if (v.tag == 903) {
+            v.frame = CGRectMake(8, 34, kPreviewW - 16, _previewPanel.bounds.size.height - 42);
+        }
+    }
 }
 
 - (void)buildContent {
@@ -11226,7 +11355,7 @@ static void startMainUI(void) {
             gHotZone = [[HotZoneView alloc] initWithFrame:CGRectMake((gMainWin.bounds.size.width - 60)/2, (gMainWin.bounds.size.height - 60)/2, 60, 60)];
             [gOverlayContainer addSubview:gHotZone];
             
-            gMenuView = [[MenuView alloc] initWithFrame:CGRectMake((gMainWin.bounds.size.width - 620)/2, (gMainWin.bounds.size.height - 440)/2, 620, 440)];
+            gMenuView = [[MenuView alloc] initWithFrame:CGRectMake((gMainWin.bounds.size.width - 700)/2, (gMainWin.bounds.size.height - 460)/2, 700, 460)];
             gMenuView.hidden = YES;
             [gOverlayContainer addSubview:gMenuView];
             
