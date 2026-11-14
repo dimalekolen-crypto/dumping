@@ -32,6 +32,7 @@
 #include <mach/vm_param.h>
 #include <mach-o/dyld.h>
 #include <sys/mman.h>
+#include <errno.h>
 #include <dispatch/dispatch.h>
 #include <CoreFoundation/CoreFoundation.h>
 
@@ -2835,12 +2836,9 @@ static void* AllocExecNear(uintptr_t target, size_t size) {
 }
 
 static bool inline_hook_install(void* target, void* hook, void** orig) {
-#if defined(__arm64e__)
-    // On arm64e an indirect branch authenticates its target; an unsigned `br x16` would
-    // fault. The game process is arm64, so the arm64 slice is the one that runs.
-    (void)target; (void)hook; (void)orig;
-    return false;
-#else
+    // This used to bail out on arm64e because "an indirect branch authenticates its
+    // target". Plain BR does not authenticate — only BRAA/BLRAA check a PAC — so the
+    // guard only disabled every inline hook on the M1 iPad, which loads the arm64e slice.
     if (!target || !hook) {
         LOG(@"[SA] hook: bad args target=%p hook=%p", target, hook);
         return false;
@@ -2887,15 +2885,22 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
     
     long ps = sysconf(_SC_PAGESIZE);
     if (ps <= 0) {
+        LOG(@"[SA] hook: sysconf failed");
         munmap(tramp, 64);
         return false;
     }
     vm_address_t start = (vm_address_t)target & ~((vm_address_t)ps - 1);
     vm_address_t end = ((vm_address_t)target + 16 + ps - 1) & ~((vm_address_t)ps - 1);
-    if (vm_protect(mach_task_self(), start, end - start, FALSE,
-                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) {
-        munmap(tramp, 64);
-        return false;
+    kern_return_t pr = vm_protect(mach_task_self(), start, end - start, FALSE,
+                                  VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+    if (pr != KERN_SUCCESS) {
+        // TXM / code signing can refuse VM_PROT_COPY on a __TEXT page. A plain mprotect
+        // still works on some jailbroken kernels, so try it before giving up.
+        if (mprotect((void*)start, end - start, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+            LOG(@"[SA] hook: page not writable at %p kr=%d errno=%d", target, (int)pr, errno);
+            munmap(tramp, 64);
+            return false;
+        }
     }
     
     uint32_t patch[4];
@@ -2910,7 +2915,6 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
     }
     LOG(@"[SA] inline hook ok: target=%p tramp=%p", target, tramp);
     return true;
-#endif
 }
 
 // UnityFramework is already mapped when bootstrap runs, so take its handle once with
@@ -5110,7 +5114,7 @@ static UIImage* CreateFlopDLCFLogo(CGSize size) {
         emitter.emitterMode = kCAEmitterLayerSurface;
         
         CAEmitterCell *snowflake = [CAEmitterCell emitterCell];
-        snowflake.birthRate = 40.0;
+        snowflake.birthRate = 26.0;
         snowflake.lifetime = 12.0;
         snowflake.velocity = 30;
         snowflake.velocityRange = 25;
@@ -5129,6 +5133,7 @@ static UIImage* CreateFlopDLCFLogo(CGSize size) {
         snowflake.scale = 0.4;
         snowflake.scaleRange = 0.6;
         snowflake.alphaSpeed = -0.04;
+        snowflake.color = [UIColor colorWithWhite:1.0 alpha:0.7].CGColor;
         
         emitter.emitterCells = @[snowflake];
         [self.layer addSublayer:emitter];
@@ -5165,6 +5170,22 @@ static UIColor* NLTextDim(void) {
     return [UIColor colorWithRed:0.55 green:0.52 blue:0.62 alpha:1.0];
 }
 
+// Softer, rounder face for the whole menu: default SF looks too sharp next to the pastel
+// palette, and the rounded design reads better at the small sizes the rows use.
+static UIFont* NLFont(CGFloat size, UIFontWeight weight) {
+    UIFont *base = [UIFont systemFontOfSize:size weight:weight];
+    if (@available(iOS 13.0, *)) {
+        UIFontDescriptor *d = [base.fontDescriptor fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
+        if (d) {
+            UIFont *f = [UIFont fontWithDescriptor:d size:size];
+            if (f) {
+                return f;
+            }
+        }
+    }
+    return base;
+}
+
 @implementation NLGroupBox
 
 - (instancetype)initWithTitle:(NSString*)title frame:(CGRect)frame {
@@ -5172,12 +5193,12 @@ static UIColor* NLTextDim(void) {
     if (self) {
         self.layer.borderColor = NLBorder().CGColor;
         self.layer.borderWidth = 1.0;
-        self.layer.cornerRadius = 10.0;
+        self.layer.cornerRadius = 12.0;
         self.backgroundColor = NLSurfaceHi();
         
         UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, 200, 16)];
         lbl.text = SafeStr(title);
-        lbl.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
+        lbl.font = NLFont(11, UIFontWeightBold);
         lbl.textColor = NLAccent();
         [self addSubview:lbl];
         self.titleLabel = lbl;
@@ -6620,6 +6641,7 @@ static void NLDrawCentered(NSString *text, CGFloat cx, CGFloat y, UIFont *font,
 - (void)skyPresetTap:(UIButton*)sender;
 - (void)updateStatus;
 - (void)previewSegTap:(UIButton*)sender;
+- (void)applyTabWidth;
 @end
 
 @interface HotZoneView : UIView
@@ -6872,6 +6894,9 @@ static NLButton* RageMakeCycle(NSString* initial, NSArray<NSString*>* labels, NS
     GarlandView *_garland;
     UIVisualEffectView *_motionBlur;
     UILabel *_pageTitle;
+    CAShapeLayer *_maskLayer;
+    SnowView *_snow;
+    CGRect _savedBounds;
 }
 
 static const CGFloat kTopBarH = 48.0;
@@ -6883,15 +6908,26 @@ static const CGFloat kPreviewW = 170.0;
     self = [super initWithFrame:frame];
     if (self) {
         _origFrame = frame;
-        self.layer.cornerRadius = 12;
+        _savedBounds = CGRectMake(0, 0, frame.size.width, frame.size.height);
+        self.layer.cornerRadius = 16;
         self.clipsToBounds = YES;
         self.userInteractionEnabled = YES;
         self.layer.borderWidth = 1;
         self.layer.borderColor = [NLAccent() colorWithAlphaComponent:0.35].CGColor;
         
+        // UIVisualEffectView draws its backdrop in a separate layer that ignores the
+        // parent's cornerRadius, so the menu kept square corners. A shape mask on the
+        // container clips every sublayer, blur included.
+        _maskLayer = [CAShapeLayer layer];
+        _maskLayer.frame = self.bounds;
+        _maskLayer.path = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:16].CGPath;
+        self.layer.mask = _maskLayer;
+        
         _blurView = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
         _blurView.frame = self.bounds;
         _blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        _blurView.layer.cornerRadius = 16;
+        _blurView.clipsToBounds = YES;
         [self addSubview:_blurView];
         
         CAGradientLayer *grad = [CAGradientLayer layer];
@@ -6902,14 +6938,14 @@ static const CGFloat kPreviewW = 170.0;
         grad.endPoint = CGPointMake(1, 1);
         [self.layer insertSublayer:grad atIndex:0];
         
-        SnowView *menuSnow = [[SnowView alloc] initWithFrame:self.bounds];
-        menuSnow.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        menuSnow.userInteractionEnabled = NO;
-        [self addSubview:menuSnow];
+        _snow = [[SnowView alloc] initWithFrame:self.bounds];
+        _snow.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        _snow.userInteractionEnabled = NO;
+        [self addSubview:_snow];
         
         // Нижняя панель вкладок — как в референсе, без бокового меню.
         _tabBar = [[UIView alloc] initWithFrame:CGRectMake(0, frame.size.height - kTabBarH - kStatusH, frame.size.width, kTabBarH)];
-        _tabBar.backgroundColor = [UIColor colorWithRed:0.08 green:0.082 blue:0.10 alpha:1.0];
+        _tabBar.backgroundColor = [UIColor colorWithRed:0.068 green:0.062 blue:0.088 alpha:1.0];
         _tabBar.layer.borderWidth = 0.5;
         _tabBar.layer.borderColor = [UIColor colorWithWhite:0.16 alpha:1.0].CGColor;
         [self addSubview:_tabBar];
@@ -6917,7 +6953,7 @@ static const CGFloat kPreviewW = 170.0;
         _statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, frame.size.height - kStatusH, frame.size.width - 24, kStatusH)];
         _statusLabel.text = @"FPS --   RAM --";
         _statusLabel.textColor = NLTextDim();
-        _statusLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightMedium];
+        _statusLabel.font = NLFont(8, UIFontWeightMedium);
         [self addSubview:_statusLabel];
         
         _topBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, frame.size.width, kTopBarH)];
@@ -6939,7 +6975,7 @@ static const CGFloat kPreviewW = 170.0;
         _pageTitle = [[UILabel alloc] initWithFrame:CGRectMake(43, 0, 220, kTopBarH)];
         _pageTitle.text = @"Visuals";
         _pageTitle.textColor = [UIColor whiteColor];
-        _pageTitle.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+        _pageTitle.font = NLFont(14, UIFontWeightSemibold);
         [_topBar addSubview:_pageTitle];
         
         _tabs = [NSMutableArray array];
@@ -7028,6 +7064,10 @@ static const CGFloat kPreviewW = 170.0;
         _motionBlur.alpha = 0.0;
         _motionBlur.userInteractionEnabled = NO;
         [self addSubview:_motionBlur];
+
+        // Snow was added before the bars and content, so it sat behind everything and was
+        // invisible. It is a non-interactive overlay, so it can live on top.
+        [self bringSubviewToFront:_snow];
 
         [self switchToTab:0];
 
@@ -7207,9 +7247,9 @@ static NSString* NLIconForTab(NSString* title) {
     CGFloat w = _tabBar.bounds.size.width / 9.0;
     b.frame = CGRectMake(idx * w + 2, 7, w - 4, 34);
     [b setTitle:SafeStr(title) forState:UIControlStateNormal];
-    b.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
+    b.titleLabel.font = NLFont(10, UIFontWeightMedium);
     b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
-    b.layer.cornerRadius = 6;
+    b.layer.cornerRadius = 8;
     [b setTitleColor:[UIColor colorWithWhite:0.55 alpha:1.0] forState:UIControlStateNormal];
     b.backgroundColor = [UIColor clearColor];
     [b addTarget:self action:@selector(tabTap:) forControlEvents:UIControlEventTouchUpInside];
@@ -7259,7 +7299,7 @@ static NSString* NLIconForTab(NSString* title) {
     for (int i = 0; i < (int)_tabs.count; i++) {
         UIButton *b = _tabs[i];
         BOOL on = (i == tabIndex);
-        b.backgroundColor = on ? [UIColor colorWithRed:0.19 green:0.14 blue:0.20 alpha:1.0] : [UIColor clearColor];
+        b.backgroundColor = on ? [UIColor colorWithRed:0.17 green:0.13 blue:0.21 alpha:1.0] : [UIColor clearColor];
         [b setTitleColor:(on ? [UIColor colorWithRed:0.86 green:0.62 blue:0.87 alpha:1.0]
                             : [UIColor colorWithWhite:0.55 alpha:1.0])
                 forState:UIControlStateNormal];
@@ -7268,7 +7308,25 @@ static NSString* NLIconForTab(NSString* title) {
         _pageTitle.text = [_tabs[tabIndex] titleForState:UIControlStateNormal];
     }
     
+    // The ESP preview belongs to VISUALS only. Every other tab gets the full width back
+    // and the window itself shrinks, so the menu stops covering the game for no reason.
+    [self applyTabWidth];
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
     [self buildContent];
+}
+
+- (void)applyTabWidth {
+    CGFloat targetW = (_currentTab == 2) ? 820.0 : 640.0;
+    if (fabs(self.bounds.size.width - targetW) < 0.5) {
+        return;
+    }
+    [UIView animateWithDuration:0.22 delay:0
+                        options:UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionBeginFromCurrentState
+                     animations:^{
+        self.bounds = CGRectMake(0, 0, targetW, self.bounds.size.height);
+        [self layoutIfNeeded];
+    } completion:nil];
 }
 
 - (void)openSettings {
@@ -7291,14 +7349,21 @@ static NSString* NLIconForTab(NSString* title) {
     if (W < 200 || H < 120) {
         return;
     }
+    _maskLayer.frame = self.bounds;
+    _maskLayer.path = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:16].CGPath;
     _topBar.frame = CGRectMake(0, 0, W, kTopBarH);
     _tabBar.frame = CGRectMake(0, H - kTabBarH - kStatusH, W, kTabBarH);
     _statusLabel.frame = CGRectMake(12, H - kStatusH, W - 24, kStatusH);
-    _content.frame = CGRectMake(0, kTopBarH, W - kPreviewW - 16, H - kTopBarH - kTabBarH - kStatusH);
+    BOOL showPreview = (_currentTab == 2);
+    _previewPanel.hidden = !showPreview;
+    CGFloat contentW = showPreview ? (W - kPreviewW - 16) : W;
+    _content.frame = CGRectMake(0, kTopBarH, contentW, H - kTopBarH - kTabBarH - kStatusH);
     _scrollView.frame = _content.bounds;
+    _scrollView.contentSize = CGSizeMake(contentW, _scrollView.contentSize.height);
     _previewPanel.frame = CGRectMake(W - kPreviewW - 8, kTopBarH + 8, kPreviewW, H - kTopBarH - kTabBarH - kStatusH - 16);
     _garland.frame = CGRectMake(0, kTopBarH - 8, W, 26);
     _motionBlur.frame = self.bounds;
+    _snow.frame = self.bounds;
 
     CGFloat tw = W / MAX(1.0, (CGFloat)_tabs.count);
     for (NSUInteger i = 0; i < _tabs.count; i++) {
@@ -10277,16 +10342,17 @@ static NSString* NLIconForTab(NSString* title) {
     
     [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
         if (self->_isMinimized) {
-            self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, self->_origFrame.size.width, kTopBarH);
+            self->_savedBounds = self.bounds;
+            self.bounds = CGRectMake(0, 0, self.bounds.size.width, kTopBarH);
             self->_content.hidden = YES;
             self->_tabBar.hidden = YES;
             self->_previewPanel.hidden = YES;
             self->_statusLabel.hidden = YES;
         } else {
-            self.frame = self->_origFrame;
+            self.bounds = self->_savedBounds;
             self->_content.hidden = NO;
             self->_tabBar.hidden = NO;
-            self->_previewPanel.hidden = NO;
+            self->_previewPanel.hidden = (self->_currentTab != 2);
             self->_statusLabel.hidden = NO;
         }
     } completion:nil];
