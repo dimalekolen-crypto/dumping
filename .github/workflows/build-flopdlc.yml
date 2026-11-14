@@ -25,7 +25,8 @@ env:
 jobs:
   build:
     name: Build dylib
-    runs-on: macos-14
+    # macos-14 на этом аккаунте отменяется сразу после старта, macos-15 работает.
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - name: Checkout
