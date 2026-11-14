@@ -55,7 +55,6 @@ jobs:
             -dynamiclib
             -install_name @rpath/FlopDLC.dylib
             -Wl,-undefined,dynamic_lookup
-            -Wl,-dead_strip
             -Wno-deprecated-declarations
             -framework Foundation
             -framework UIKit
@@ -101,6 +100,8 @@ jobs:
           otool -D "$OUT"
           echo "--- load commands"
           otool -l "$OUT" | grep -E "LC_BUILD_VERSION|platform|minos|sdk " | head -20 || true
+          echo "--- sections"
+          otool -l "$OUT" | grep -E "sectname|segname" | sort -u
 
           # Точка входа — __attribute__((constructor)): без неё библиотека бесполезна.
           if ! otool -l "$OUT" | grep -q "__mod_init_func"; then
