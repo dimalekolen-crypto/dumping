@@ -2751,6 +2751,8 @@ static bool vtable_hook_install(void* klass, void* mi, void* hook, void** orig) 
         if (orig) {
             *orig = target;
         }
+        const char* cn = p_class_get_name ? p_class_get_name(klass) : nullptr;
+        LOG(@"[VT] slot %p class %s target %p", (void*)p, cn ? cn : "?", target);
         __atomic_store_n((void**)p, hook, __ATOMIC_RELEASE);
         __builtin___clear_cache((char*)p, (char*)p + sizeof(void*));
         return true;
@@ -12521,6 +12523,10 @@ typedef Vec2 (*fn_GetSpreadMultiplier)(void*, void*, void*);
 static fn_GetSpreadMultiplier orig_GetSpreadMultiplier = nullptr;
 
 static Vec2 hook_GetSpreadMultiplier(void* self, void* info, void* mi) {
+    static std::atomic<bool> seen{false};
+    if (!seen.exchange(true)) {
+        LOG(@"[BALL] GetSpreadMultiplier hook reached");
+    }
     if (NoSpreadActive()) {
         return Vec2(SpreadFloorValue(), SpreadFloorValue());
     }
@@ -12587,6 +12593,10 @@ typedef bool (*fn_TryUse)(void*, void*, void*);
 static fn_TryUse orig_TryUse = nullptr;
 
 static bool hook_TryUse(void* self, void* info, void* mi) {
+    static std::atomic<bool> seen{false};
+    if (!seen.exchange(true)) {
+        LOG(@"[BALL] TryUse hook reached");
+    }
     // TryUse runs before the shot is built; open the fire window here so the visual
     // aim-on-fire can track the target for the shot that is about to happen.
     gFireHeldUntil = NowMs() + 400;
