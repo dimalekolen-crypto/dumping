@@ -2904,7 +2904,7 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
     if (pr != KERN_SUCCESS) {
         // TXM / code signing can refuse VM_PROT_COPY on a __TEXT page. A plain mprotect
         // still works on some jailbroken kernels, so try it before giving up.
-        if (mprotect((void*)start, end - start, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        if (mprotect((void*)start, end - start, PROT_READ | PROT_WRITE) != 0) {
             LOG(@"[SA] hook: page not writable at %p kr=%d errno=%d", target, (int)pr, errno);
             munmap(tramp, 64);
             return false;
@@ -2916,6 +2916,16 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
     patch[1] = 0xD61F0200u; // br x16
     *(uint64_t*)&patch[2] = (uint64_t)hook;
     memcpy(target, patch, 16);
+    // The vm_protect above dropped VM_PROT_EXECUTE to make the page writable. Without
+    // restoring it the first call into the patched function faults on instruction fetch —
+    // exactly the "crash on match entry, no [SA] fka hook reached" symptom.
+    kern_return_t xr = vm_protect(mach_task_self(), start, end - start, FALSE,
+                                  VM_PROT_READ | VM_PROT_EXECUTE);
+    if (xr != KERN_SUCCESS) {
+        if (mprotect((void*)start, end - start, PROT_READ | PROT_EXEC) != 0) {
+            LOG(@"[SA] hook: cannot restore exec at %p kr=%d errno=%d", target, (int)xr, errno);
+        }
+    }
     __builtin___clear_cache((char*)target, (char*)target + 16);
     
     if (orig) {
