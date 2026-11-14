@@ -31,6 +31,7 @@
 #include <mach/task_info.h>
 #include <mach/vm_param.h>
 #include <mach-o/dyld.h>
+#include <sys/mman.h>
 #include <dispatch/dispatch.h>
 #include <CoreFoundation/CoreFoundation.h>
 
@@ -2706,6 +2707,97 @@ static bool hook_install(void* mi, void* hook, void** orig) {
     __atomic_store_n(slot, hook, __ATOMIC_RELEASE);
     
     return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// ARM64 inline hook.
+//
+// hook_install() above only rewrites MethodInfo->methodPointer. il2cpp compiles a call to
+// a private non-virtual method as a direct `bl`, and a virtual call goes through a vtable
+// slot that was filled from methodPointer at class init — neither path re-reads the
+// MethodInfo, so those hooks never fire. Patching the code itself is the only reliable way.
+//
+// 16-byte absolute branch: ldr x16, #8 ; br x16 ; .quad target
+// The displaced instructions are copied into an executable trampoline that jumps back to
+// target+16, so the original body still runs.
+// ---------------------------------------------------------------------------------------
+
+static bool InsnIsPCRelative(uint32_t insn) {
+    if ((insn & 0x7C000000u) == 0x14000000u) return true; // B / BL
+    if ((insn & 0xFF000010u) == 0x54000000u) return true; // B.cond
+    if ((insn & 0x7E000000u) == 0x34000000u) return true; // CBZ / CBNZ
+    if ((insn & 0x7E000000u) == 0x36000000u) return true; // TBZ / TBNZ
+    if ((insn & 0x9F000000u) == 0x10000000u) return true; // ADR
+    if ((insn & 0x9F000000u) == 0x90000000u) return true; // ADRP
+    if ((insn & 0x3B000000u) == 0x18000000u) return true; // LDR literal
+    return false;
+}
+
+static void* AllocExecPage(size_t size) {
+    void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANON, -1, 0);
+    return (p == MAP_FAILED) ? nullptr : p;
+}
+
+static bool inline_hook_install(void* target, void* hook, void** orig) {
+#if defined(__arm64e__)
+    // On arm64e an indirect branch authenticates its target; an unsigned `br x16` would
+    // fault. The game process is arm64, so the arm64 slice is the one that runs.
+    (void)target; (void)hook; (void)orig;
+    return false;
+#else
+    if (!target || !hook || (((uintptr_t)target & 3u) != 0)) {
+        return false;
+    }
+    
+    uint32_t saved[4] = {0, 0, 0, 0};
+    vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), (vm_address_t)target, sizeof(saved),
+                          (vm_address_t)saved, &got) != KERN_SUCCESS ||
+        got != sizeof(saved)) {
+        return false;
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (InsnIsPCRelative(saved[i])) {
+            // Relocating these needs a full disassembler; refuse instead of corrupting.
+            return false;
+        }
+    }
+    
+    uint8_t* tramp = (uint8_t*)AllocExecPage(64);
+    if (!tramp) {
+        return false;
+    }
+    memcpy(tramp, saved, 16);
+    uint32_t* t = (uint32_t*)(tramp + 16);
+    t[0] = 0x58000050u; // ldr x16, #8
+    t[1] = 0xD61F0200u; // br x16
+    *(uint64_t*)(tramp + 24) = (uint64_t)target + 16;
+    __builtin___clear_cache((char*)tramp, (char*)tramp + 32);
+    
+    long ps = sysconf(_SC_PAGESIZE);
+    if (ps <= 0) {
+        return false;
+    }
+    vm_address_t start = (vm_address_t)target & ~((vm_address_t)ps - 1);
+    vm_address_t end = ((vm_address_t)target + 16 + ps - 1) & ~((vm_address_t)ps - 1);
+    if (vm_protect(mach_task_self(), start, end - start, FALSE,
+                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) {
+        return false;
+    }
+    
+    uint32_t patch[4];
+    patch[0] = 0x58000050u; // ldr x16, #8
+    patch[1] = 0xD61F0200u; // br x16
+    *(uint64_t*)&patch[2] = (uint64_t)hook;
+    memcpy(target, patch, 16);
+    __builtin___clear_cache((char*)target, (char*)target + 16);
+    
+    if (orig) {
+        *orig = tramp;
+    }
+    return true;
+#endif
 }
 
 // UnityFramework is already mapped when bootstrap runs, so take its handle once with
@@ -11729,6 +11821,31 @@ static bool BuildSilentAimShot(Vec3 from, Vec3 originalTo, Vec3* outTo, void** o
     return true;
 }
 
+// Client-side raycast: ItemEquipWeaponRange.fka(Vector3 from, Vector3 to) -> List<LocalHit>.
+// This is the only place the shot direction can be bent on the client — fke is a Mirror
+// [Command], so its body runs on the server and a client hook there can never fire.
+static fn_CalcShotHits orig_CalcShotHits = nullptr;
+
+static void* hook_CalcShotHits(void* self, Vec3 from, Vec3 to, void* mi) {
+    static std::atomic<bool> seen{false};
+    if (!seen.exchange(true)) {
+        LOG(@"[SA] fka hook reached");
+    }
+    Vec3 newTo;
+    if (BuildSilentAimShot(from, to, &newTo, nullptr, self)) {
+        if (gBallisticsDebug.load()) {
+            LOG(@"[SA] fka redirected to=(%.2f,%.2f,%.2f)", newTo.x, newTo.y, newTo.z);
+        }
+        if (orig_CalcShotHits) {
+            return orig_CalcShotHits(self, from, newTo, mi);
+        }
+    }
+    if (orig_CalcShotHits) {
+        return orig_CalcShotHits(self, from, to, mi);
+    }
+    return nullptr;
+}
+
 static void hook_FireBulletCommand(void* self, Vec3 from, Vec3 to, void* hits, bool grounded, void* mi) {
     static std::atomic<bool> seen{false};
     if (!seen.exchange(true)) {
@@ -11815,15 +11932,25 @@ static void InstallBallisticsHooks(void) {
                 LOG(@"[BALL] fke not found, silent aim disabled");
             }
 
-            // Silent aim works purely through the MethodInfo hook above — no native
-            // code bytes are ever modified.
-            
-            // Local raycast used to rebuild the hit list for the silent-aim direction.
+            // Silent aim: fke is a Mirror [Command], so its body runs on the server and a
+            // client-side hook on it can never fire. Bend the direction in the client-side
+            // raycast instead, which is what actually builds the hit list for the shot.
             void* miCalc = p_class_get_method_from_name(rangeCls, "fka", 2);
             if (miCalc) {
                 p_CalcShotHitsMI = miCalc;
-                p_CalcShotHits = (fn_CalcShotHits)methodPtr(miCalc);
-                LOG(@"[BALL] shot hit-calc resolved");
+                void* calcPtr = methodPtr(miCalc);
+                if (inline_hook_install(calcPtr, (void*)hook_CalcShotHits,
+                                        (void**)&orig_CalcShotHits)) {
+                    // Recompute path must go through the trampoline, otherwise it would
+                    // call the patched entry and recurse into our own hook.
+                    p_CalcShotHits = orig_CalcShotHits;
+                    LOG(@"[SA] fka inline hook installed");
+                } else {
+                    p_CalcShotHits = (fn_CalcShotHits)calcPtr;
+                    LOG(@"[SA] fka inline hook FAILED (pc-relative prologue?)");
+                }
+            } else {
+                LOG(@"[SA] fka not found, silent aim disabled");
             }
         }
         
