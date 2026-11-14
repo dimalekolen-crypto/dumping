@@ -5145,21 +5145,21 @@ static UIImage* CreateFlopDLCFLogo(CGSize size) {
 @property (nonatomic, strong) UILabel *titleLabel;
 @end
 
-// Neverlose palette: near-black surfaces, one violet accent, hairline borders.
+// Монохромная палитра как в референсе: почти чёрные поверхности, белый акцент.
 static UIColor* NLAccent(void) {
-    return gMenuAccent ?: [UIColor colorWithRed:0.545 green:0.361 blue:0.965 alpha:1.0];
+    return gMenuAccent ?: [UIColor colorWithWhite:0.96 alpha:1.0];
 }
 static UIColor* NLSurface(void) {
-    return [UIColor colorWithRed:0.055 green:0.055 blue:0.070 alpha:1.0];
+    return [UIColor colorWithWhite:0.016 alpha:1.0];
 }
 static UIColor* NLSurfaceHi(void) {
-    return [UIColor colorWithRed:0.086 green:0.086 blue:0.106 alpha:1.0];
+    return [UIColor colorWithWhite:0.078 alpha:1.0];
 }
 static UIColor* NLBorder(void) {
-    return [UIColor colorWithRed:0.145 green:0.145 blue:0.176 alpha:1.0];
+    return [UIColor colorWithWhite:0.122 alpha:1.0];
 }
 static UIColor* NLTextDim(void) {
-    return [UIColor colorWithRed:0.545 green:0.545 blue:0.596 alpha:1.0];
+    return [UIColor colorWithWhite:0.54 alpha:1.0];
 }
 
 @implementation NLGroupBox
@@ -6446,6 +6446,8 @@ static void NLDrawCentered(NSString *text, CGFloat cx, CGFloat y, UIFont *font,
 - (void)selectPlayerChamsMat:(UIButton*)sender;
 - (void)selectWeaponChamsMat:(UIButton*)sender;
 - (void)skyPresetTap:(UIButton*)sender;
+- (void)updateStatus;
+- (void)previewSegTap:(UIButton*)sender;
 @end
 
 @interface HotZoneView : UIView
@@ -6685,10 +6687,12 @@ static NLButton* RageMakeCycle(NSString* initial, NSArray<NSString*>* labels, NS
 
 @implementation MenuView {
     UIVisualEffectView *_blurView;
-    UIView *_sidebar;
     UIView *_topBar;
     UIView *_content;
     UIScrollView *_scrollView;
+    UIView *_tabBar;
+    UIView *_previewPanel;
+    UILabel *_statusLabel;
     NSMutableArray *_tabs;
     int _currentTab;
     BOOL _isMinimized;
@@ -6696,6 +6700,9 @@ static NLButton* RageMakeCycle(NSString* initial, NSArray<NSString*>* labels, NS
 }
 
 static const CGFloat kSidebarW = 108.0;
+static const CGFloat kTabBarH = 34.0;
+static const CGFloat kStatusH = 22.0;
+static const CGFloat kPreviewW = 190.0;
 
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
@@ -6714,8 +6721,8 @@ static const CGFloat kSidebarW = 108.0;
         
         CAGradientLayer *grad = [CAGradientLayer layer];
         grad.frame = self.bounds;
-        grad.colors = @[(id)[UIColor colorWithRed:0.035 green:0.035 blue:0.047 alpha:0.92].CGColor,
-                        (id)[UIColor colorWithRed:0.075 green:0.055 blue:0.115 alpha:0.92].CGColor];
+        grad.colors = @[(id)[UIColor colorWithWhite:0.016 alpha:0.96].CGColor,
+                        (id)[UIColor colorWithWhite:0.016 alpha:0.96].CGColor];
         grad.startPoint = CGPointMake(0, 0);
         grad.endPoint = CGPointMake(1, 1);
         [self.layer insertSublayer:grad atIndex:0];
@@ -6725,56 +6732,20 @@ static const CGFloat kSidebarW = 108.0;
         menuSnow.userInteractionEnabled = NO;
         [self addSubview:menuSnow];
         
-        _sidebar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kSidebarW, frame.size.height)];
-        _sidebar.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.28];
-        _sidebar.layer.borderWidth = 0.5;
-        _sidebar.layer.borderColor = NLBorder().CGColor;
-        [self addSubview:_sidebar];
+        // Нижняя панель вкладок — как в референсе, без бокового меню.
+        _tabBar = [[UIView alloc] initWithFrame:CGRectMake(0, frame.size.height - kTabBarH - kStatusH, frame.size.width, kTabBarH)];
+        _tabBar.backgroundColor = [UIColor colorWithWhite:0.055 alpha:1.0];
+        _tabBar.layer.borderWidth = 0.5;
+        _tabBar.layer.borderColor = NLBorder().CGColor;
+        [self addSubview:_tabBar];
+
+        _statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, frame.size.height - kStatusH, frame.size.width - 24, kStatusH)];
+        _statusLabel.text = @"FPS --   RAM --";
+        _statusLabel.textColor = NLTextDim();
+        _statusLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightMedium];
+        [self addSubview:_statusLabel];
         
-        UILabel *brand = [[UILabel alloc] initWithFrame:CGRectMake(14, 14, kSidebarW - 20, 18)];
-        brand.text = @"FLOPDLC";
-        brand.textColor = [UIColor whiteColor];
-        brand.font = [UIFont systemFontOfSize:12 weight:UIFontWeightHeavy];
-        [_sidebar addSubview:brand];
-        
-        UILabel *brandSub = [[UILabel alloc] initWithFrame:CGRectMake(14, 30, kSidebarW - 20, 12)];
-        brandSub.text = [NSString stringWithFormat:@"v%s", kEspVersion];
-        brandSub.textColor = NLAccent();
-        brandSub.font = [UIFont systemFontOfSize:8 weight:UIFontWeightBold];
-        [_sidebar addSubview:brandSub];
-        
-        UIView *userCard = [[UIView alloc] initWithFrame:CGRectMake(8, frame.size.height - 56, kSidebarW - 16, 44)];
-        userCard.backgroundColor = NLSurfaceHi();
-        userCard.layer.cornerRadius = 8;
-        userCard.layer.borderWidth = 1;
-        userCard.layer.borderColor = NLBorder().CGColor;
-        [_sidebar addSubview:userCard];
-        
-        UIView *avatar = [[UIView alloc] initWithFrame:CGRectMake(8, 8, 28, 28)];
-        avatar.backgroundColor = NLAccent();
-        avatar.layer.cornerRadius = 14;
-        [userCard addSubview:avatar];
-        
-        UILabel *avatarText = [[UILabel alloc] initWithFrame:avatar.bounds];
-        avatarText.text = @"F";
-        avatarText.textColor = [UIColor whiteColor];
-        avatarText.textAlignment = NSTextAlignmentCenter;
-        avatarText.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
-        [avatar addSubview:avatarText];
-        
-        UILabel *userName = [[UILabel alloc] initWithFrame:CGRectMake(44, 8, kSidebarW - 60, 14)];
-        userName.text = @"Player";
-        userName.textColor = [UIColor whiteColor];
-        userName.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
-        [userCard addSubview:userName];
-        
-        UILabel *userRole = [[UILabel alloc] initWithFrame:CGRectMake(44, 22, kSidebarW - 60, 12)];
-        userRole.text = @"User";
-        userRole.textColor = NLTextDim();
-        userRole.font = [UIFont systemFontOfSize:8 weight:UIFontWeightMedium];
-        [userCard addSubview:userRole];
-        
-        _topBar = [[UIView alloc] initWithFrame:CGRectMake(kSidebarW, 0, frame.size.width - kSidebarW, 35)];
+        _topBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, frame.size.width, 35)];
         _topBar.backgroundColor = [UIColor clearColor];
         _topBar.layer.borderWidth = 0.5;
         _topBar.layer.borderColor = NLBorder().CGColor;
@@ -6824,7 +6795,7 @@ static const CGFloat kSidebarW = 108.0;
         [cb addTarget:self action:@selector(closeAction) forControlEvents:UIControlEventTouchUpInside];
         [_topBar addSubview:cb];
         
-        _content = [[UIView alloc] initWithFrame:CGRectMake(kSidebarW, 35, frame.size.width - kSidebarW, frame.size.height - 35)];
+        _content = [[UIView alloc] initWithFrame:CGRectMake(0, 35, frame.size.width - kPreviewW - 8, frame.size.height - 35 - kTabBarH - kStatusH)];
         [self addSubview:_content];
         
         _scrollView = [[UIScrollView alloc] initWithFrame:_content.bounds];
@@ -6832,10 +6803,48 @@ static const CGFloat kSidebarW = 108.0;
         _scrollView.showsVerticalScrollIndicator = NO;
         // VISUALS is the tallest tab (the third-person group sits at y 2660 + 240), so the
         // scroll area has to cover it.
-        _scrollView.contentSize = CGSizeMake(frame.size.width - kSidebarW, 3400);
+        _scrollView.contentSize = CGSizeMake(frame.size.width - kPreviewW - 8, 3400);
         [_content addSubview:_scrollView];
+
+        // Правая панель предпросмотра: вкладки Players / Local / World и манекен с ESP.
+        _previewPanel = [[UIView alloc] initWithFrame:CGRectMake(frame.size.width - kPreviewW - 8, 43, kPreviewW, frame.size.height - 35 - kTabBarH - kStatusH - 16)];
+        _previewPanel.backgroundColor = NLSurfaceHi();
+        _previewPanel.layer.cornerRadius = 10;
+        _previewPanel.layer.borderWidth = 1;
+        _previewPanel.layer.borderColor = NLBorder().CGColor;
+        [self addSubview:_previewPanel];
+
+        NSArray *segTitles = @[@"Players", @"Local", @"World"];
+        CGFloat segW = (kPreviewW - 16) / 3.0;
+        for (int i = 0; i < 3; i++) {
+            UIButton *sb = [UIButton buttonWithType:UIButtonTypeCustom];
+            sb.frame = CGRectMake(8 + i * segW, 8, segW, 20);
+            [sb setTitle:segTitles[i] forState:UIControlStateNormal];
+            sb.titleLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightSemibold];
+            [sb setTitleColor:(i == 0 ? [UIColor whiteColor] : NLTextDim()) forState:UIControlStateNormal];
+            sb.backgroundColor = (i == 0 ? [UIColor colorWithWhite:1.0 alpha:0.10] : [UIColor clearColor]);
+            sb.layer.cornerRadius = 5;
+            sb.tag = 900 + i;
+            [sb addTarget:self action:@selector(previewSegTap:) forControlEvents:UIControlEventTouchUpInside];
+            [_previewPanel addSubview:sb];
+        }
+
+        EspPreviewView *pv = [[EspPreviewView alloc] initWithFrame:CGRectMake(8, 34, kPreviewW - 16, _previewPanel.bounds.size.height - 42)];
+        pv.layer.cornerRadius = 8;
+        pv.clipsToBounds = YES;
+        [_previewPanel addSubview:pv];
         
         [self switchToTab:0];
+
+        __weak MenuView *weakMenu = self;
+        [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+            MenuView *m = weakMenu;
+            if (!m) {
+                [t invalidate];
+                return;
+            }
+            [m updateStatus];
+        }];
     }
     return self;
 }
@@ -7000,23 +7009,45 @@ static NSString* NLIconForTab(NSString* title) {
 - (void)addTab:(NSString*)title x:(CGFloat)x {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
     NSUInteger idx = _tabs.count;
-    b.frame = CGRectMake(8, 52 + idx * 34, kSidebarW - 16, 30);
+    CGFloat w = _tabBar.bounds.size.width / 9.0;
+    b.frame = CGRectMake(idx * w, 0, w, _tabBar.bounds.size.height);
     [b setTitle:SafeStr(title) forState:UIControlStateNormal];
-    b.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
-    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-    b.contentEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 0);
-    NSString *icon = NLIconForTab(title);
-    if (icon) {
-        [b setImage:[UIImage systemImageNamed:icon] forState:UIControlStateNormal];
-        b.tintColor = NLTextDim();
-        b.imageEdgeInsets = UIEdgeInsetsMake(0, 0, 0, 8);
-    }
+    b.titleLabel.font = [UIFont systemFontOfSize:9 weight:UIFontWeightBold];
+    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
     [b setTitleColor:NLTextDim() forState:UIControlStateNormal];
     b.backgroundColor = [UIColor clearColor];
-    b.layer.cornerRadius = 8;
     [b addTarget:self action:@selector(tabTap:) forControlEvents:UIControlEventTouchUpInside];
-    [_sidebar addSubview:b];
+    [_tabBar addSubview:b];
     [_tabs addObject:b];
+}
+
+- (void)previewSegTap:(UIButton*)sender {
+    for (UIView *v in _previewPanel.subviews) {
+        if (![v isKindOfClass:[UIButton class]]) {
+            continue;
+        }
+        UIButton *b = (UIButton*)v;
+        if (b.tag < 900) {
+            continue;
+        }
+        BOOL on = (b == sender);
+        [b setTitleColor:(on ? [UIColor whiteColor] : NLTextDim()) forState:UIControlStateNormal];
+        b.backgroundColor = on ? [UIColor colorWithWhite:1.0 alpha:0.10] : [UIColor clearColor];
+    }
+}
+
+- (void)updateStatus {
+    float fps = gCurrentFps;
+    if (!std::isfinite(fps) || fps <= 0.0f) {
+        fps = 0.0f;
+    }
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    double rssMB = 0.0;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
+        rssMB = (double)info.resident_size / (1024.0 * 1024.0);
+    }
+    _statusLabel.text = [NSString stringWithFormat:@"FPS %.0f   RAM %.0f MB", fps, rssMB];
 }
 
 - (void)tabTap:(UIButton*)sender {
@@ -8146,14 +8177,6 @@ static NSString* NLIconForTab(NSString* title) {
             
             NLGroupBox *gCross = [[NLGroupBox alloc] initWithTitle:@"Crosshair & FOV" frame:CGRectMake(0, 1260, colW, 400)];
             [c1 addSubview:gCross];
-
-            // Живой предпросмотр: те же настройки, что и в бою, но на манекене.
-            NLGroupBox *gPrev = [[NLGroupBox alloc] initWithTitle:@"ESP Preview" frame:CGRectMake(0, 1670, colW, 430)];
-            [c1 addSubview:gPrev];
-            EspPreviewView *prevView = [[EspPreviewView alloc] initWithFrame:CGRectMake(12, 30, colW - 24, 386)];
-            prevView.layer.cornerRadius = 8;
-            prevView.clipsToBounds = YES;
-            [gPrev addSubview:prevView];
             CGFloat cy2 = 30;
             
             NLButton *bCHStyle = [[NLButton alloc] initWithTitle:(gCrosshairStyle == 0 ? @"Cross" : (gCrosshairStyle == 1 ? @"Dot" : (gCrosshairStyle == 2 ? @"Circle" : (gCrosshairStyle == 3 ? @"T" : @"X"))))];
@@ -10019,9 +10042,15 @@ static NSString* NLIconForTab(NSString* title) {
         if (self->_isMinimized) {
             self.frame = CGRectMake(self.frame.origin.x, self.frame.origin.y, self->_origFrame.size.width, 35);
             self->_content.hidden = YES;
+            self->_tabBar.hidden = YES;
+            self->_previewPanel.hidden = YES;
+            self->_statusLabel.hidden = YES;
         } else {
             self.frame = self->_origFrame;
             self->_content.hidden = NO;
+            self->_tabBar.hidden = NO;
+            self->_previewPanel.hidden = NO;
+            self->_statusLabel.hidden = NO;
         }
     } completion:nil];
 }
