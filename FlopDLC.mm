@@ -2809,7 +2809,7 @@ static void* AllocExecNear(uintptr_t target, size_t size) {
     for (int i = 1; i <= 8; ++i) {
         for (int dir = 1; dir >= -1; dir -= 2) {
             uintptr_t hint = (uintptr_t)((int64_t)base + dir * i * step);
-            void* p = mmap((void*)hint, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+            void* p = mmap((void*)hint, size, PROT_READ | PROT_WRITE,
                            MAP_PRIVATE | MAP_ANON, -1, 0);
             if (p == MAP_FAILED) {
                 continue;
@@ -2823,7 +2823,7 @@ static void* AllocExecNear(uintptr_t target, size_t size) {
     }
     // Last resort: anywhere inside ADRP's ±4 GB reach. A prologue that also contains a
     // B/BL will fail relocation and the caller bails out cleanly.
-    void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+    void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANON, -1, 0);
     if (p != MAP_FAILED) {
         int64_t d = (int64_t)((uintptr_t)p - target);
@@ -2881,6 +2881,14 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
     t[0] = 0x58000050u; // ldr x16, #8
     t[1] = 0xD61F0200u; // br x16
     *(uint64_t*)(tramp + 24) = (uint64_t)target + 16;
+    // W^X: the page was mapped RW so the writes above are legal. Mapping it RWX up
+    // front lets the kernel silently drop PROT_EXEC on arm64e, and the first call into
+    // the trampoline then faults. Flip it to RX now that the code is in place.
+    if (mprotect(tramp, 64, PROT_READ | PROT_EXEC) != 0) {
+        LOG(@"[SA] hook: trampoline mprotect failed errno=%d", errno);
+        munmap(tramp, 64);
+        return false;
+    }
     __builtin___clear_cache((char*)tramp, (char*)tramp + 32);
     
     long ps = sysconf(_SC_PAGESIZE);
@@ -6897,6 +6905,9 @@ static NLButton* RageMakeCycle(NSString* initial, NSArray<NSString*>* labels, NS
     CAShapeLayer *_maskLayer;
     SnowView *_snow;
     CGRect _savedBounds;
+    UIButton *_btnCfg;
+    UIButton *_btnMin;
+    UIButton *_btnClose;
 }
 
 static const CGFloat kTopBarH = 48.0;
@@ -6966,10 +6977,10 @@ static const CGFloat kPreviewW = 170.0;
         [_topBar addGestureRecognizer:pan];
         [self addSubview:_topBar];
         
-        UILabel *logo = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 25, kTopBarH)];
-        logo.text = @"✿";
-        logo.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
-        logo.textColor = [UIColor colorWithRed:0.82 green:0.52 blue:0.84 alpha:1.0];
+        // Same mark as the watermark instead of the flower glyph.
+        UIImageView *logo = [[UIImageView alloc] initWithImage:CreateFlopDLCFLogo(CGSizeMake(40, 40))];
+        logo.frame = CGRectMake(12, (kTopBarH - 22) / 2, 22, 22);
+        logo.contentMode = UIViewContentModeScaleAspectFit;
         [_topBar addSubview:logo];
 
         _pageTitle = [[UILabel alloc] initWithFrame:CGRectMake(43, 0, 220, kTopBarH)];
@@ -6991,26 +7002,26 @@ static const CGFloat kPreviewW = 170.0;
         [self addTab:@"SKINS" x:462];
         [self addTab:@"CONFIG" x:512];
         
-        UIButton *cfg = [UIButton buttonWithType:UIButtonTypeCustom];
-        cfg.frame = CGRectMake(_topBar.bounds.size.width - 90, 16, 15, 15);
-        [cfg setImage:[UIImage systemImageNamed:@"gearshape"] forState:UIControlStateNormal];
-        cfg.tintColor = NLTextDim();
-        [cfg addTarget:self action:@selector(openSettings) forControlEvents:UIControlEventTouchUpInside];
-        [_topBar addSubview:cfg];
+        // These used to be positioned once from the 820-wide frame, so shrinking the
+        // menu to 640 pushed them off the right edge. They are laid out in
+        // layoutSubviews now, which keeps them pinned to the current width.
+        _btnCfg = [UIButton buttonWithType:UIButtonTypeCustom];
+        [_btnCfg setImage:[UIImage systemImageNamed:@"gearshape"] forState:UIControlStateNormal];
+        _btnCfg.tintColor = NLTextDim();
+        [_btnCfg addTarget:self action:@selector(openSettings) forControlEvents:UIControlEventTouchUpInside];
+        [_topBar addSubview:_btnCfg];
         
-        UIButton *mb = [UIButton buttonWithType:UIButtonTypeCustom];
-        mb.frame = CGRectMake(_topBar.bounds.size.width - 60, 16, 15, 15);
-        [mb setImage:[UIImage systemImageNamed:@"minus"] forState:UIControlStateNormal];
-        mb.tintColor = [UIColor lightGrayColor];
-        [mb addTarget:self action:@selector(minimizeAction) forControlEvents:UIControlEventTouchUpInside];
-        [_topBar addSubview:mb];
+        _btnMin = [UIButton buttonWithType:UIButtonTypeCustom];
+        [_btnMin setImage:[UIImage systemImageNamed:@"minus"] forState:UIControlStateNormal];
+        _btnMin.tintColor = [UIColor lightGrayColor];
+        [_btnMin addTarget:self action:@selector(minimizeAction) forControlEvents:UIControlEventTouchUpInside];
+        [_topBar addSubview:_btnMin];
         
-        UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
-        cb.frame = CGRectMake(_topBar.bounds.size.width - 30, 16, 15, 15);
-        [cb setImage:[UIImage systemImageNamed:@"xmark"] forState:UIControlStateNormal];
-        cb.tintColor = [UIColor lightGrayColor];
-        [cb addTarget:self action:@selector(closeAction) forControlEvents:UIControlEventTouchUpInside];
-        [_topBar addSubview:cb];
+        _btnClose = [UIButton buttonWithType:UIButtonTypeCustom];
+        [_btnClose setImage:[UIImage systemImageNamed:@"xmark"] forState:UIControlStateNormal];
+        _btnClose.tintColor = [UIColor lightGrayColor];
+        [_btnClose addTarget:self action:@selector(closeAction) forControlEvents:UIControlEventTouchUpInside];
+        [_topBar addSubview:_btnClose];
         
         _content = [[UIView alloc] initWithFrame:CGRectMake(0, kTopBarH, frame.size.width - kPreviewW - 16, frame.size.height - kTopBarH - kTabBarH - kStatusH)];
         [self addSubview:_content];
@@ -7352,6 +7363,9 @@ static NSString* NLIconForTab(NSString* title) {
     _maskLayer.frame = self.bounds;
     _maskLayer.path = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:16].CGPath;
     _topBar.frame = CGRectMake(0, 0, W, kTopBarH);
+    _btnCfg.frame = CGRectMake(W - 90, 16, 15, 15);
+    _btnMin.frame = CGRectMake(W - 60, 16, 15, 15);
+    _btnClose.frame = CGRectMake(W - 30, 16, 15, 15);
     _tabBar.frame = CGRectMake(0, H - kTabBarH - kStatusH, W, kTabBarH);
     _statusLabel.frame = CGRectMake(12, H - kStatusH, W - 24, kStatusH);
     BOOL showPreview = (_currentTab == 2);
@@ -12603,7 +12617,19 @@ static void* hook_CalcShotHits(void* self, Vec3 from, Vec3 to, void* mi) {
         }
     }
     if (orig_CalcShotHits) {
-        return orig_CalcShotHits(self, from, to, mi);
+        // One-shot breadcrumbs: if the process dies inside the trampoline the "calling"
+        // line is the last thing in the log, which tells us the patch itself is fine and
+        // the relocated copy is what faults.
+        static std::atomic<bool> trampIn{false};
+        static std::atomic<bool> trampOut{false};
+        if (!trampIn.exchange(true)) {
+            LOG(@"[SA] trampoline call %p", (void*)orig_CalcShotHits);
+        }
+        void* r = orig_CalcShotHits(self, from, to, mi);
+        if (!trampOut.exchange(true)) {
+            LOG(@"[SA] trampoline returned %p", r);
+        }
+        return r;
     }
     return nullptr;
 }
