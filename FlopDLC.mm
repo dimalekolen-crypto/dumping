@@ -2710,6 +2710,54 @@ static bool hook_install(void* mi, void* hook, void** orig) {
     return true;
 }
 
+// Virtual methods are called through a vtable slot that was filled from methodPointer at
+// class init, so rewriting MethodInfo->methodPointer never reaches them. The vtable lives
+// in __DATA, which is writable, so swapping the slot is a pure data patch — no __TEXT
+// write, no integrity check.
+static bool vtable_hook_install(void* klass, void* mi, void* hook, void** orig) {
+    if (!klass || !mi || !hook) {
+        return false;
+    }
+    void* target = nullptr;
+    vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), (vm_address_t)mi, sizeof(void*),
+                          (vm_address_t)&target, &got) != KERN_SUCCESS ||
+        got != sizeof(void*) || !target) {
+        return false;
+    }
+    long ps = sysconf(_SC_PAGESIZE);
+    if (ps <= 0) {
+        return false;
+    }
+    // The vtable is a contiguous array of VirtualInvokeData { methodPtr, method }.
+    // Scan the class object for the code pointer; the first hit is the vtable slot.
+    uintptr_t base = (uintptr_t)klass;
+    for (uintptr_t p = base; p < base + 0x8000; p += sizeof(void*)) {
+        void* cur = nullptr;
+        vm_size_t n = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)p, sizeof(void*),
+                              (vm_address_t)&cur, &n) != KERN_SUCCESS ||
+            n != sizeof(void*) || cur != target) {
+            continue;
+        }
+        vm_address_t start = (vm_address_t)p & ~((vm_address_t)ps - 1);
+        vm_address_t end = ((vm_address_t)p + sizeof(void*) + ps - 1) & ~((vm_address_t)ps - 1);
+        if (vm_protect(mach_task_self(), start, end - start, FALSE,
+                       VM_PROT_READ | VM_PROT_WRITE) != KERN_SUCCESS) {
+            if (mprotect((void*)start, end - start, PROT_READ | PROT_WRITE) != 0) {
+                return false;
+            }
+        }
+        if (orig) {
+            *orig = target;
+        }
+        __atomic_store_n((void**)p, hook, __ATOMIC_RELEASE);
+        __builtin___clear_cache((char*)p, (char*)p + sizeof(void*));
+        return true;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------------------
 // ARM64 inline hook.
 //
@@ -12498,6 +12546,33 @@ static void hook_UseProcess(void* self, void* info, void* mi) {
         BallisticsWeaponTick(self);
     }
     
+    // Silent aim: UseInfoDirection carries From (0x20) and To (0x2C). Bending To here
+    // changes the direction the shot is built from without touching any code page.
+    if (info && g_silentAimActive.load() && g_haveTarget.load()) {
+        void* objClass = *(void**)info;
+        const char* clsName = objClass ? p_class_get_name(objClass) : nullptr;
+        if (clsName && strstr(clsName, "UseInfoDirection")) {
+            uint32_t seq1 = g_silentAimSeq.load(std::memory_order_acquire);
+            Vec3 target = g_silentAimTarget;
+            uint32_t seq2 = g_silentAimSeq.load(std::memory_order_acquire);
+            if (seq1 == seq2 && !(seq1 & 1) && Math::Finite(target)) {
+                Vec3* to = (Vec3*)((uintptr_t)info + 0x2C);
+                Vec3 from = *(Vec3*)((uintptr_t)info + 0x20);
+                Vec3 dir = target - from;
+                float len = sqrtf(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+                Vec3 cur = *to;
+                Vec3 curDir = cur - from;
+                float origLen = sqrtf(curDir.x*curDir.x + curDir.y*curDir.y + curDir.z*curDir.z);
+                if (len > 0.05f && len < 400.0f && origLen > 0.05f && origLen < 400.0f) {
+                    *to = from + dir * (origLen / len);
+                    if (gBallisticsDebug.load()) {
+                        LOG(@"[SA] UseProcess redirected to=(%.2f,%.2f,%.2f)", to->x, to->y, to->z);
+                    }
+                }
+            }
+        }
+    }
+    
     if (orig_UseProcess) {
         orig_UseProcess(self, info, mi);
     }
@@ -12711,8 +12786,15 @@ static void InstallBallisticsHooks(void) {
             
             void* miUse = p_class_get_method_from_name(rangeCls, "UseProcess", 1);
             if (miUse) {
-                hook_install(miUse, (void*)hook_UseProcess, (void**)&orig_UseProcess);
-                LOG(@"[BALL] UseProcess hook installed");
+                // UseProcess is virtual (slot 58): hook_install only rewrites methodPointer,
+                // which the vtable slot never re-reads. Swap the slot itself (data-only).
+                void* origVt = nullptr;
+                if (vtable_hook_install(rangeCls, miUse, (void*)hook_UseProcess, &origVt)) {
+                    orig_UseProcess = (fn_UseProcess)origVt;
+                    LOG(@"[BALL] UseProcess vtable hook installed");
+                } else if (hook_install(miUse, (void*)hook_UseProcess, (void**)&orig_UseProcess)) {
+                    LOG(@"[BALL] UseProcess hook installed");
+                }
             }
             
             void* miTry = p_class_get_method_from_name(rangeCls, "TryUse", 1);
