@@ -7302,7 +7302,8 @@ static NSString* NLIconForTab(NSString* title) {
 
     CGFloat tw = W / MAX(1.0, (CGFloat)_tabs.count);
     for (NSUInteger i = 0; i < _tabs.count; i++) {
-        _tabs[i].frame = CGRectMake(i * tw + 2, 7, tw - 4, 34);
+        UIButton *b = _tabs[i];
+        b.frame = CGRectMake(i * tw + 2, 7, tw - 4, 34);
     }
 
     CGFloat segW = (kPreviewW - 16) / 3.0;
