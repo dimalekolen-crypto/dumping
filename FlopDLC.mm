@@ -2841,15 +2841,22 @@ static bool inline_hook_install(void* target, void* hook, void** orig) {
     (void)target; (void)hook; (void)orig;
     return false;
 #else
-    if (!target || !hook || (((uintptr_t)target & 3u) != 0)) {
+    if (!target || !hook) {
+        LOG(@"[SA] hook: bad args target=%p hook=%p", target, hook);
+        return false;
+    }
+    if (((uintptr_t)target & 3u) != 0) {
+        LOG(@"[SA] hook: misaligned target %p", target);
         return false;
     }
     
     uint32_t saved[4] = {0, 0, 0, 0};
     vm_size_t got = 0;
-    if (vm_read_overwrite(mach_task_self(), (vm_address_t)target, sizeof(saved),
-                          (vm_address_t)saved, &got) != KERN_SUCCESS ||
-        got != sizeof(saved)) {
+    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)target,
+                                         sizeof(saved), (vm_address_t)saved, &got);
+    if (kr != KERN_SUCCESS || got != sizeof(saved)) {
+        LOG(@"[SA] hook: vm_read failed at %p kr=%d got=%llu", target, (int)kr,
+            (unsigned long long)got);
         return false;
     }
     
@@ -12052,6 +12059,7 @@ static void InstallBallisticsHooks(void) {
             if (miCalc) {
                 p_CalcShotHitsMI = miCalc;
                 void* calcPtr = methodPtr(miCalc);
+                LOG(@"[SA] fka mi=%p methodPtr=%p", miCalc, calcPtr);
                 if (inline_hook_install(calcPtr, (void*)hook_CalcShotHits,
                                         (void**)&orig_CalcShotHits)) {
                     // Recompute path must go through the trampoline, otherwise it would
