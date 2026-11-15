@@ -12648,8 +12648,19 @@ static bool BuildSilentAimShot(Vec3 from, Vec3 originalTo, Vec3* outTo, void** o
     // runs after the weapon already fired, so it can never bend the current bullet.
     // fke is the fire Command itself, so it only runs on a real shot — no need to gate on
     // the OnClickFire hooks (which are missing on some builds and left aim-on-fire dead).
+    static std::atomic<int> g_saidbg_calls{0};
+    int calls = g_saidbg_calls.fetch_add(1, std::memory_order_relaxed);
+
     const bool aimOnFire = gAimOnFireEnabled.load() || gHotAimOnFireEnabled.load();
-    if (!outTo || !(gSilentAimEnabled.load() || aimOnFire) || !g_silentAimActive.load() || !g_haveTarget.load()) {
+    bool sa_enabled = gSilentAimEnabled.load();
+    bool sa_active = g_silentAimActive.load();
+    bool have_target = g_haveTarget.load();
+    if (!outTo || !(sa_enabled || aimOnFire) || !sa_active || !have_target) {
+        if (calls < 8 || (calls % 200 == 0)) {
+            LOG(@"[SA] BuildSilentAimShot skip #%d outTo=%d sa_en=%d aim_on=%d sa_act=%d have_tgt=%d",
+                  (void*)(uintptr_t)calls, outTo ? 1 : 0, sa_enabled ? 1 : 0, aimOnFire ? 1 : 0,
+                  sa_active ? 1 : 0, have_target ? 1 : 0);
+        }
         return false;
     }
     
@@ -12657,9 +12668,18 @@ static bool BuildSilentAimShot(Vec3 from, Vec3 originalTo, Vec3* outTo, void** o
     Vec3 target = g_silentAimTarget;
     uint32_t seq2 = g_silentAimSeq.load(std::memory_order_acquire);
     if (seq1 != seq2 || (seq1 & 1)) {
+        if (calls < 8 || (calls % 200 == 0)) {
+            LOG(@"[SA] BuildSilentAimShot seq mismatch #%d seq1=%u seq2=%u",
+                  (void*)(uintptr_t)calls, seq1, seq2);
+        }
         return false;
     }
     if (!Math::Finite(target) || !Math::Finite(from) || !Math::Finite(originalTo)) {
+        if (calls < 8 || (calls % 200 == 0)) {
+            LOG(@"[SA] BuildSilentAimShot non-finite #%d target=(%.2f,%.2f,%.2f) from=(%.2f,%.2f,%.2f) to=(%.2f,%.2f,%.2f)",
+                  (void*)(uintptr_t)calls,
+                  target.x, target.y, target.z, from.x, from.y, from.z, originalTo.x, originalTo.y, originalTo.z);
+        }
         return false;
     }
     
@@ -12667,6 +12687,10 @@ static bool BuildSilentAimShot(Vec3 from, Vec3 originalTo, Vec3* outTo, void** o
     float targetLen = Vec3Len(dir);
     float originalLen = Vec3Len(originalTo - from);
     if (targetLen < 0.05f || targetLen > 400.0f) {
+        if (calls < 8 || (calls % 200 == 0)) {
+            LOG(@"[SA] BuildSilentAimShot bad len #%d targetLen=%.2f originalLen=%.2f",
+                  (void*)(uintptr_t)calls, targetLen, originalLen);
+        }
         return false;
     }
     if (originalLen < 0.05f || originalLen > 400.0f) {
