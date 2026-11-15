@@ -12831,15 +12831,19 @@ static void InstallBallisticsHooks(void) {
                 p_CalcShotHitsMI = miCalc;
                 void* calcPtr = methodPtr(miCalc);
                 LOG(@"[SA] fka mi=%p methodPtr=%p", miCalc, calcPtr);
-                // Inline patching of __TEXT is suspected of tripping the game's integrity
-                // check on scene load: the crash lands right after Hub.unload, before fka is
-                // ever called, and only appeared once the arm64e bail was removed. Use the
-                // methodPointer hook only until that is confirmed.
                 p_CalcShotHits = (fn_CalcShotHits)calcPtr;
-                if (hook_install(miCalc, (void*)hook_CalcShotHits, (void**)&orig_CalcShotHits)) {
+                // __TEXT inline patching is disabled on non-jailbroken iOS (arm64e / W^X:
+                // the kernel refuses RWX pages, inline_hook_install bails). Use the vtable
+                // slot swap first — it patches __DATA only, no __TEXT write, works without
+                // jailbreak. Fall back to methodPointer hook if the vtable scan fails.
+                void* origVt = nullptr;
+                if (vtable_hook_install(rangeCls, miCalc, (void*)hook_CalcShotHits, &origVt)) {
+                    orig_CalcShotHits = (fn_CalcShotHits)origVt;
+                    LOG(@"[SA] fka vtable hook installed");
+                } else if (hook_install(miCalc, (void*)hook_CalcShotHits, (void**)&orig_CalcShotHits)) {
                     LOG(@"[SA] fka methodPointer hook installed (inline disabled)");
                 } else {
-                    LOG(@"[SA] fka methodPointer hook FAILED");
+                    LOG(@"[SA] fka hook FAILED");
                 }
             } else {
                 LOG(@"[SA] fka not found, silent aim disabled");
